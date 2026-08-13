@@ -1,0 +1,593 @@
+# ui_components
+
+import streamlit as st
+import pandas as pd
+from datetime import datetime
+import database as db
+import reservas as res
+import horario_fijo as hf
+import multas
+from constants import DIAS, HORAS, LABS_NAMES_HORARIO, LABS_HORARIO, TECNICOS, LABS_ORDEN_HORARIO, LABORATORIOS
+
+# ============================================================
+#  INICIALIZACIÓN DE ESTADO
+# ============================================================
+
+# Inicializar editor_version
+if "editor_version" not in st.session_state:
+    st.session_state.editor_version = 0
+
+if "eliminar_version" not in st.session_state:
+    st.session_state.eliminar_version = 0
+
+if "confirmar_inasistencia" not in st.session_state:
+    st.session_state.confirmar_inasistencia = False
+    st.session_state.inasistencias_pendientes = []
+    st.session_state.cambios_pendientes = []
+# ============================================================
+#  1. EDITOR DE ASISTENCIAS
+# ============================================================
+
+def render_editor_asistencias(df, key):
+    """
+    Muestra un editor de asistencias con confirmación para 'No' (inasistencia).
+    """
+    if "editor_version" not in st.session_state:
+        st.session_state.editor_version = 0
+    if "confirmar_inasistencia" not in st.session_state:
+        st.session_state.confirmar_inasistencia = False
+        st.session_state.inasistencias_pendientes = []
+        st.session_state.cambios_pendientes = []
+        
+    if df is None or df.empty:
+        return
+
+    # ===== INICIALIZACIÓN SEGURA =====
+    if "editor_version" not in st.session_state:
+        st.session_state.editor_version = 0
+
+    config = {
+        "id": st.column_config.TextColumn("ID", width="small", disabled=True),
+        "asiste": st.column_config.SelectboxColumn("Asiste", options=["", "Si", "No"])
+    }
+    column_order = [c for c in df.columns if c != 'id'] + ['id']
+
+    version = st.session_state.editor_version
+    editor_key = f"editor_{key}_{version}"
+
+    edited = st.data_editor(
+        df,
+        column_config=config,
+        column_order=column_order,
+        use_container_width=True,
+        hide_index=True,
+        key=editor_key
+    )
+
+    if st.button("Guardar cambios", key=f"save_{key}_{version}"):
+        cambios = []
+        inasistencias = []
+        for _, row in edited.iterrows():
+            id_res = row['id']
+            nuevo_estado = row['asiste']
+            anterior = df[df['id'] == id_res]['asiste'].iloc[0]
+            if nuevo_estado != anterior:
+                if nuevo_estado == "No":
+                    inasistencias.append(id_res)
+                cambios.append((id_res, nuevo_estado))
+
+        if not cambios:
+            st.info("Sin cambios")
+            return
+
+        if inasistencias:
+            st.session_state.inasistencias_pendientes = inasistencias
+            st.session_state.cambios_pendientes = cambios
+            st.session_state.confirmar_inasistencia = True
+            st.rerun()
+        else:
+            for id_res, nuevo_estado in cambios:
+                res.actualizar_asiste(id_res, nuevo_estado, None)
+            st.session_state.editor_version += 1
+            st.success(f"{len(cambios)} cambios guardados")
+            st.rerun()
+
+    if st.session_state.confirmar_inasistencia:
+        with st.popover("⚠️ Confirmar inasistencia", use_container_width=True):
+            st.warning(f"Estás marcando **{len(st.session_state.inasistencias_pendientes)}** reserva(s) como 'No asistió'.")
+            st.write("Por favor, confirma con tu nombre:")
+            tecnico = st.selectbox("Técnico que marca la inasistencia", TECNICOS, key=f"tecnico_confirm_{key}")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Confirmar", key=f"confirmar_{key}"):
+                    for id_res, nuevo_estado in st.session_state.cambios_pendientes:
+                        res.actualizar_asiste(id_res, nuevo_estado, tecnico)
+                    st.session_state.editor_version += 1
+                    st.session_state.confirmar_inasistencia = False
+                    st.session_state.inasistencias_pendientes = []
+                    st.session_state.cambios_pendientes = []
+                    st.success(f"Cambios guardados (inasistencias registradas por {tecnico})")
+                    st.rerun()
+            with col2:
+                if st.button("❌ Cancelar", key=f"cancelar_{key}"):
+                    st.session_state.confirmar_inasistencia = False
+                    st.session_state.inasistencias_pendientes = []
+                    st.session_state.cambios_pendientes = []
+                    st.rerun()
+
+# ============================================================
+#  2. ELIMINADOR DE RESERVAS
+# ============================================================
+
+def render_eliminar_reserva(df, key):
+    """
+    Muestra un selector para eliminar una reserva del DataFrame.
+    """
+    if df is None or df.empty:
+        return
+
+    confirm_key = f"confirm_{key}"
+    if confirm_key not in st.session_state:
+        st.session_state[confirm_key] = False
+
+    st.divider()
+    st.subheader("🗑️ Eliminar reserva")
+    
+    opts = {}
+    for _, row in df.iterrows():
+        id_res = row['id']
+        desc_parts = []
+        
+        if 'fecha' in row.index:
+            desc_parts.append(str(row['fecha']))
+        if 'hora' in row.index:
+            desc_parts.append(str(row['hora']))
+        if 'laboratorio' in row.index:
+            desc_parts.append(str(row['laboratorio']))
+        if 'banco' in row.index:
+            desc_parts.append(f"B{row['banco']}")
+        desc_parts.append(f"- {row['nombres']}")
+        opts[id_res] = " ".join(desc_parts)
+    
+    id_eliminar = st.selectbox(
+        "Selecciona la reserva a eliminar",
+        list(opts.keys()),
+        format_func=lambda x: opts[x],
+        key=f"eliminar_select_{key}"
+    )
+    
+    if st.button("🗑️ Eliminar reserva", key=f"eliminar_btn_{key}"):
+        st.session_state[confirm_key] = True
+        st.session_state[f"id_a_eliminar_{key}"] = id_eliminar
+        st.rerun()
+    
+    if st.session_state[confirm_key]:
+        id_res = st.session_state.get(f"id_a_eliminar_{key}")
+        if id_res is not None:
+            nombre = df[df['id'] == id_res]['nombres'].iloc[0]
+            st.warning(f"⚠️ ¿Estás seguro de eliminar la reserva de **{nombre}**?")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Sí, eliminar", key=f"eliminar_confirm_{key}"):
+                    res.eliminar_reserva(id_res)
+                    st.success(f"✅ Reserva de {nombre} eliminada correctamente")
+                    st.session_state[confirm_key] = False
+                    if f"id_a_eliminar_{key}" in st.session_state:
+                        del st.session_state[f"id_a_eliminar_{key}"]
+                    if key.startswith("eliminar_fecha_lab"):
+                        if "labs_params" in st.session_state:
+                            del st.session_state.labs_params
+                    elif key.startswith("eliminar_codigo"):
+                        if "labs_codigo_busqueda" in st.session_state:
+                            del st.session_state.labs_codigo_busqueda
+                    st.rerun()
+            with col2:
+                if st.button("❌ No, cancelar", key=f"eliminar_cancel_{key}"):
+                    st.session_state[confirm_key] = False
+                    if f"id_a_eliminar_{key}" in st.session_state:
+                        del st.session_state[f"id_a_eliminar_{key}"]
+                    st.rerun()
+    else:
+        st.info("ℹ️ Selecciona una reserva y haz clic en 'Eliminar reserva' para comenzar")
+
+
+# ============================================================
+#  3. HORARIO GENERAL (SIN POPOVER)
+# ============================================================
+
+def mostrar_horario_general():
+    st.subheader("📅 Horario General de Laboratorios")
+    st.caption("Los colores indican la carrera. Selecciona una celda y haz clic en 'Editar celda' para modificarla.")
+
+    opciones_carrera = [
+        "Ing. Eléctrica",
+        "Ing. Electrónica",
+        "Ing. De Sistema",
+        "Ing. Industrial",
+        "Ing. Catastral",
+        "Posgrados",
+        "Adicional"
+    ]
+
+    colores_carrera = {
+        "Ing. Eléctrica": "#FFCCCC",
+        "Ing. Electrónica": "#CCE5FF",
+        "Ing. De Sistema": "#E6CCFF",
+        "Ing. Industrial": "#CCF2FF",
+        "Ing. Catastral": "#CCFFCC",
+        "Posgrados": "#FFFFCC",
+        "Adicional": "#FF8C00"
+    }
+    dia_seleccionado = st.radio(
+        "Selecciona el día",
+        DIAS,
+        horizontal=True,
+        key="horario_dia"
+    )
+
+    # ===== USAR LABS_ORDEN_HORARIO Y LABS_HORARIO =====
+    labs_keys = [lab for lab in LABS_ORDEN_HORARIO if lab in LABS_HORARIO]
+
+    if "horario_editar" not in st.session_state:
+        st.session_state.horario_editar = None
+
+    # ===== CONSTRUIR TABLA CON ENCABEZADOS FIJOS =====
+    html = """
+    <div style="max-height: 550px; overflow-y: auto; border: 1px solid #ddd; border-radius: 5px;">
+    <table style="width:100%; border-collapse: collapse; font-family: sans-serif; font-size: 0.85rem;">
+    <thead>
+    <tr>
+        <th style="position: sticky; top: 0; background-color: #f0f0f0; z-index: 10; border:1px solid #ddd; padding:8px; text-align:center; font-weight:bold;">Hora</th>
+    """
+
+    for lab in labs_keys:
+        html += f"""
+        <th style="position: sticky; top: 0; background-color: #f0f0f0; z-index: 10; border:1px solid #ddd; padding:8px; text-align:center; font-weight:bold;">{LABS_NAMES_HORARIO[lab]}</th>
+        """
+
+    html += "</tr></thead><tbody>"
+
+    for hora in HORAS:
+        html += f"<tr><td style='border:1px solid #ddd; padding:8px; font-weight:bold; text-align:center; background-color:#f9f9f9;'>{hora}</td>"
+        for lab in labs_keys:
+            celda = hf.get_horario_celda(dia_seleccionado, hora, lab)
+            
+            if celda and celda["asignatura"]:
+                carrera = celda.get("carrera", "")
+                color_fondo = colores_carrera.get(carrera, "#F0F0F0")
+                
+                texto = f"""
+                    <strong>{celda['asignatura']}</strong><br>
+                    {carrera}<br>
+                    <span style='font-size:0.8rem;'>
+                        Monitor: {celda['monitor']}<br>
+                        Prof: {celda['profesor']}
+                    </span>
+                """
+                
+                html += f"""
+                <td style='
+                    border:1px solid #ddd; 
+                    padding:8px; 
+                    background-color:{color_fondo};
+                    text-align:center;
+                    vertical-align:middle;
+                '>
+                    {texto}
+                </td>
+                """
+            else:
+                html += f"""
+                <td style='
+                    border:1px solid #ddd; 
+                    padding:8px; 
+                    background-color:#E8F5E9;
+                    text-align:center;
+                    vertical-align:middle;
+                '>
+                    🟢 Libre
+                </td>
+                """
+        html += "</tr>"
+    
+    html += "</tbody></table></div>"
+    
+    st.components.v1.html(html, height=600, scrolling=False)
+
+    # ===== FORMULARIO DE EDICIÓN =====
+    st.divider()
+    st.subheader("✏️ Editar una celda")
+
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        lab_editar = st.selectbox(
+            "Laboratorio",
+            labs_keys,
+            format_func=lambda x: LABS_NAMES_HORARIO[x],
+            key="horario_editar_lab"
+        )
+    with col2:
+        hora_editar = st.selectbox(
+            "Hora",
+            HORAS,
+            key="horario_editar_hora"
+        )
+    with col3:
+        st.write("")
+        st.write("")
+        if st.button("📝 Editar celda", key="horario_editar_btn", use_container_width=True):
+            celda = hf.get_horario_celda(dia_seleccionado, hora_editar, lab_editar)
+            st.session_state.horario_editar = {
+                "dia": dia_seleccionado,
+                "hora": hora_editar,
+                "laboratorio": lab_editar,
+                "datos": celda
+            }
+            st.rerun()
+
+    # ===== FORMULARIO INLINE =====
+    if st.session_state.horario_editar is not None:
+        datos_edit = st.session_state.horario_editar
+        dia = datos_edit["dia"]
+        hora = datos_edit["hora"]
+        lab = datos_edit["laboratorio"]
+        datos = datos_edit["datos"] or {}
+
+        st.subheader("📝 Modificar información de la celda")
+        st.write(f"**Día:** {dia} | **Hora:** {hora} | **Laboratorio:** {LABS_NAMES_HORARIO[lab]}")
+        st.divider()
+
+        col1, col2 = st.columns(2)
+        with col1:
+            asignatura = st.text_input("Asignatura", value=datos.get("asignatura", ""))
+            carrera_index = opciones_carrera.index(datos.get("carrera", "")) if datos.get("carrera") in opciones_carrera else 0
+            carrera = st.selectbox(
+                "Carrera",
+                options=opciones_carrera,
+                index=carrera_index,
+                key="horario_carrera_select"
+            )
+        with col2:
+            monitor = st.text_input("Monitor", value=datos.get("monitor", ""))
+            profesor = st.text_input("Profesor", value=datos.get("profesor", ""))
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("💾 Guardar cambios", use_container_width=True):
+                if asignatura.strip():
+                    hf.set_horario_celda(dia, hora, lab, asignatura, carrera, monitor, profesor)
+                else:
+                    hf.delete_horario_celda(dia, hora, lab)
+                st.session_state.horario_editar = None
+                st.rerun()
+        with col2:
+            if st.button("🗑️ Eliminar", use_container_width=True):
+                hf.delete_horario_celda(dia, hora, lab)
+                st.session_state.horario_editar = None
+                st.rerun()
+        with col3:
+            if st.button("❌ Cancelar", use_container_width=True):
+                st.session_state.horario_editar = None
+                st.rerun()
+# ============================================================
+#  4. GESTIÓN DE MULTAS (DEUDORES)
+# ============================================================
+
+def mostrar_formulario_agregar_multa(codigo):
+    """
+    Muestra el formulario para agregar una nueva multa a un estudiante.
+    """
+    st.subheader("➕ Agregar nueva multa")
+    with st.form(key=f"form_agregar_{codigo}"):
+        col1, col2 = st.columns(2)
+        with col1:
+            fecha_multa = st.date_input("Fecha de multa", datetime.now().date())
+            tecnico_asigna = st.selectbox(
+                "Técnico que asigna", 
+                TECNICOS,
+                key=f"asigna_{codigo}"
+            )
+        with col2:
+            motivo = st.text_area("Motivo", height=80)
+            sancion = st.text_input("Sanción (opcional)")
+        
+        if st.form_submit_button("💾 Guardar multa"):
+            if not motivo:
+                st.error("❌ El motivo es obligatorio")
+            else:
+                multas.agregar_multa(
+                    codigo, 
+                    fecha_multa.strftime("%Y-%m-%d"), 
+                    motivo, 
+                    sancion, 
+                    tecnico_asigna
+                )
+                st.success("✅ Multa agregada correctamente")
+                st.rerun()
+
+
+def mostrar_perfil_estudiante(codigo):
+    """
+    Muestra el perfil completo de un estudiante (multas activas, historial y formulario para agregar).
+    """
+    estudiante = db.ejecutar("SELECT nombres, proyecto FROM estudiantes WHERE codigo=?", (codigo,), fetch=True)
+    if estudiante:
+        nombre, carrera = estudiante[0]
+        st.write(f"**Nombre:** {nombre}")
+        st.write(f"**Carrera:** {carrera if carrera else 'No registrada'}")
+    else:
+        st.warning("⚠️ Estudiante no encontrado en la tabla de estudiantes.")
+        return
+    
+    df_multas = multas.obtener_multas_estudiante(codigo)
+    if df_multas.empty:
+        st.info("No hay multas registradas para este estudiante.")
+        mostrar_formulario_agregar_multa(codigo)
+        return
+    
+    df_activas = df_multas[df_multas['pagado'] == 'NO']
+    df_pagadas = df_multas[df_multas['pagado'] == 'SI']
+
+    # ===== MULTAS ACTIVAS =====
+    if not df_activas.empty:
+        st.subheader("🔴 Multas activas")
+        for _, m in df_activas.iterrows():
+            st.write(f"**Fecha:** {m['fecha_multa']}")
+            st.write(f"**Motivo:** {m['motivo']}")
+            st.write(f"**Sanción:** {m['sancion'] if m['sancion'] else 'N/A'}")
+            st.write(f"**Técnico que asigna:** {m['tecnico_asigna']}")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                with st.expander("✅ Pagar multa", expanded=False):
+                    tecnico_recibe = st.selectbox(
+                        "Técnico que recibe el pago", 
+                        TECNICOS, 
+                        key=f"tecnico_recibe_{m['id']}"
+                    )
+                    if st.button(f"Confirmar pago #{m['id']}", key=f"confirmar_pago_{m['id']}"):
+                        multas.pagar_multa(m['id'], tecnico_recibe)
+                        st.success("✅ Multa pagada correctamente")
+                        st.rerun()
+            
+            with col2:
+                if st.button(f"🗑️ Eliminar multa #{m['id']}", key=f"eliminar_{m['id']}"):
+                    multas.eliminar_multa(m['id'])
+                    st.success("🗑️ Multa eliminada")
+                    st.rerun()
+            
+            st.divider()
+    else:
+        st.info("✅ No hay multas activas.")
+
+    # ===== HISTORIAL DE MULTAS PAGADAS =====
+    if not df_pagadas.empty:
+        with st.expander("📜 Historial de multas pagadas"):
+            for _, m in df_pagadas.iterrows():
+                st.write(f"**Fecha de multa:** {m['fecha_multa']}")
+                st.write(f"**Fecha de pago:** {m['fecha_pago']}")
+                st.write(f"**Motivo:** {m['motivo']}")
+                st.write(f"**Sanción:** {m['sancion'] if m['sancion'] else 'N/A'}")
+                st.write(f"**Técnico que recibe:** {m['tecnico_recibe']}")
+                st.divider()
+
+    # ===== AGREGAR NUEVA MULTA =====
+    mostrar_formulario_agregar_multa(codigo)
+
+
+def mostrar_deudores():
+    st.subheader("💰 Gestión de Deudores")
+    st.caption("Estudiantes con multas activas (pagado = 'NO'). Usa el buscador para encontrar cualquier estudiante.")
+
+    search_term = st.text_input("🔍 Buscar por código o nombre", 
+                                placeholder="Ej: 20211005067 o 'Juan'", 
+                                key="deudor_search")
+
+    df_deudores = multas.obtener_deudores()
+
+    if df_deudores.empty and not search_term:
+        st.info("🎉 No hay estudiantes con multas activas.")
+        return
+
+    if search_term:
+        df_filtrado = df_deudores[
+            df_deudores['codigo_estudiante'].str.contains(search_term, case=False, na=False) |
+            df_deudores['nombres'].str.contains(search_term, case=False, na=False)
+        ]
+    else:
+        df_filtrado = df_deudores
+
+    # ===== MOSTRAR TABLA DE DEUDORES (SOLO RESUMEN) =====
+    if not df_filtrado.empty:
+        st.subheader("📋 Lista de deudores")
+        st.dataframe(
+            df_filtrado[['codigo_estudiante', 'nombres', 'carrera', 'numero_multas']],
+            column_config={
+                "codigo_estudiante": "Código",
+                "nombres": "Nombre",
+                "carrera": "Carrera",
+                "numero_multas": "N° Multas"
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # ===== BOTÓN PARA DESCARGAR REPORTE DETALLADO =====
+        st.divider()
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.subheader("📊 Reporte detallado de deudores")
+            st.caption("Descarga un CSV con todas las multas activas (fechas, motivos, sanciones, técnicos).")
+        with col2:
+            # Generar el CSV con detalle completo
+            query_detalle = """
+                SELECT 
+                    m.codigo_estudiante,
+                    e.nombres,
+                    e.proyecto as carrera,
+                    m.fecha_multa,
+                    m.motivo,
+                    m.sancion,
+                    m.tecnico_asigna,
+                    m.pagado
+                FROM multas m
+                LEFT JOIN estudiantes e ON m.codigo_estudiante = e.codigo
+                WHERE m.pagado = 'NO'
+                ORDER BY e.nombres, m.fecha_multa DESC
+            """
+            df_detalle = db.fetch_df(query_detalle)
+            
+            if not df_detalle.empty:
+                csv_data = df_detalle.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Descargar CSV",
+                    data=csv_data,
+                    file_name=f"deudores_detalle_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    mime="text/csv",
+                    key="descargar_deudores_detalle",
+                    use_container_width=True
+                )
+    if search_term and df_filtrado.empty:
+        st.info("🔍 El estudiante no tiene multas activas. Buscando en la base de datos de estudiantes...")
+        df_estudiantes = multas.buscar_estudiantes(search_term)
+        
+        if df_estudiantes.empty:
+            st.warning("⚠️ No se encontró ningún estudiante con ese código o nombre.")
+            with st.expander("➕ Registrar nuevo estudiante"):
+                nuevo_codigo = st.text_input("Código del estudiante *", key="nuevo_codigo")
+                nuevo_nombre = st.text_input("Nombre completo *", key="nuevo_nombre")
+                nuevo_proyecto = st.text_input("Carrera/Proyecto", key="nuevo_proyecto")
+                if st.button("📥 Registrar estudiante", key="registrar_nuevo"):
+                    if nuevo_codigo and nuevo_nombre:
+                        db.ejecutar("INSERT INTO estudiantes (codigo, nombres, proyecto) VALUES (?, ?, ?)",
+                                    (nuevo_codigo, nuevo_nombre, nuevo_proyecto))
+                        st.success(f"✅ Estudiante {nuevo_nombre} registrado. Ahora puedes agregar una multa.")
+                        st.rerun()
+                    else:
+                        st.error("❌ Código y nombre son obligatorios.")
+        else:
+            st.subheader("📋 Estudiantes encontrados (sin multas activas)")
+            for _, row in df_estudiantes.iterrows():
+                with st.expander(f"👤 {row['nombres']} ({row['codigo']}) - {row['multas_activas']} multas activas", expanded=False):
+                    mostrar_perfil_estudiante(row['codigo'])
+
+    elif search_term and len(df_filtrado) == 1:
+        row = df_filtrado.iloc[0]
+        codigo = row['codigo_estudiante']
+        with st.expander(f"👤 {row['nombres']} ({codigo}) - Detalle completo", expanded=True):
+            mostrar_perfil_estudiante(codigo)
+    
+    elif search_term and len(df_filtrado) > 1:
+        st.info(f"🔍 Se encontraron {len(df_filtrado)} estudiantes con multas activas.")
+        for _, row in df_filtrado.iterrows():
+            codigo = row['codigo_estudiante']
+            if st.button(f"Ver historial de {row['nombres']}", key=f"btn_historial_{codigo}"):
+                with st.expander(f"👤 {row['nombres']} ({codigo})", expanded=True):
+                    mostrar_perfil_estudiante(codigo)
+    else:
+        if df_deudores.empty:
+            st.info("🎉 No hay deudores. Usa el buscador para gestionar multas de estudiantes específicos.")
+        else:
+            st.caption("💡 Usa el buscador para ver el historial completo de un estudiante.")    
