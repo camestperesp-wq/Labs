@@ -82,7 +82,7 @@ with tab1:
 with tab2:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col1:
-        if st.button("◀ Semana anterior", key="labs_semana_prev"):
+        if st.button("◀ Semana anterior", key="reserva_semana_prev"):
             st.session_state.labs_semana_inicio -= timedelta(days=7)
             st.rerun()
     with col2:
@@ -92,29 +92,40 @@ with tab2:
             unsafe_allow_html=True
         )
     with col3:
-        if st.button("Siguiente semana ▶", key="labs_semana_next"):
+        if st.button("Siguiente semana ▶", key="reserva_semana_next"):
             st.session_state.labs_semana_inicio += timedelta(days=7)
             st.rerun()
     
+    # Calcular fechas de la semana actual
+    lunes = st.session_state.labs_semana_inicio
+    fechas_semana = [lunes + timedelta(days=i) for i in range(6)]
+    
+    # Crear opciones con el formato "Lunes 12/08"
+    opciones_dias = []
+    for i, fecha in enumerate(fechas_semana):
+        nombre_dia = DIAS[i]
+        fecha_str = fecha.strftime("%d/%m")
+        opciones_dias.append(f"{nombre_dia} {fecha_str}")
+    
     dia_seleccionado = st.radio(
         "Selecciona el día",
-        options=DIAS,
+        options=opciones_dias,
         horizontal=True,
-        key="labs_dia_selector"
+        key="reserva_dia_selector"
     )
     
-    # Mostrar calendario con el día seleccionado
-    cal.mostrar_calendario_interactivo(dia_seleccionado)
+    # Extraer el día real del texto seleccionado
+    dia_actual = dia_seleccionado.split(" ")[0]
+    
+    cal.mostrar_calendario_interactivo(dia_actual)
     cal.mostrar_detalle_celda()
     cal.mostrar_formulario_reserva_profesor()
     cal.mostrar_formulario_asistencia_docente()
-
 with tab3:
     mostrar_deudores()
 
 with tab4:
     rep.mostrar_consulta_fecha_lab()
-
 with tab5:
     rep.mostrar_busqueda_codigo()
 

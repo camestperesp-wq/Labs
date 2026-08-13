@@ -27,10 +27,9 @@ if "confirmar_inasistencia" not in st.session_state:
 # ============================================================
 #  1. EDITOR DE ASISTENCIAS
 # ============================================================
-
-def render_editor_asistencias(df, key):
+def render_editor_asistencias(df, key, laboratorio=None):
     """
-    Muestra un editor de asistencias con confirmación para 'No' (inasistencia).
+    Muestra un editor de asistencias con opción para cambiar banco.
     """
     if "editor_version" not in st.session_state:
         st.session_state.editor_version = 0
@@ -38,7 +37,7 @@ def render_editor_asistencias(df, key):
         st.session_state.confirmar_inasistencia = False
         st.session_state.inasistencias_pendientes = []
         st.session_state.cambios_pendientes = []
-        
+    
     if df is None or df.empty:
         return
 
@@ -46,14 +45,36 @@ def render_editor_asistencias(df, key):
     if "editor_version" not in st.session_state:
         st.session_state.editor_version = 0
 
+    # ===== OBTENER CAPACIDAD DEL LABORATORIO =====
+    from constants import LABORATORIOS
+    
+    if laboratorio and laboratorio in LABORATORIOS:
+        capacidad_maxima = LABORATORIOS[laboratorio]
+    else:
+        capacidad_maxima = 99
+        st.warning(f"⚠️ No se pudo detectar el laboratorio. Capacidad predeterminada: 99")
+
+    # ===== CONFIGURACIÓN DEL DATA_EDITOR =====
     config = {
         "id": st.column_config.TextColumn("ID", width="small", disabled=True),
+        "banco": st.column_config.NumberColumn(
+            "Banco", 
+            width="small",
+            min_value=1,
+            max_value=capacidad_maxima,
+            step=1
+        ),
         "asiste": st.column_config.SelectboxColumn("Asiste", options=["", "Si", "No"])
     }
-    column_order = [c for c in df.columns if c != 'id'] + ['id']
+    
+    column_order = ['id', 'banco', 'codigo', 'nombres', 'proyecto', 'asiste']
 
     version = st.session_state.editor_version
     editor_key = f"editor_{key}_{version}"
+
+    # ===== MOSTRAR ADVERTENCIA CLARA =====
+    st.warning(f"⚠️ **Rango permitido para banco: 1 a {capacidad_maxima}**")
+    st.caption("Si ingresas un número fuera de rango, el sistema mostrará un error al guardar.")
 
     edited = st.data_editor(
         df,
@@ -64,22 +85,80 @@ def render_editor_asistencias(df, key):
         key=editor_key
     )
 
+    # ===== Botón Guardar cambios =====
     if st.button("Guardar cambios", key=f"save_{key}_{version}"):
+        # ===== VALIDACIÓN COMPLETA =====
+        errores = []
         cambios = []
         inasistencias = []
+        cambios_banco = []
+        
+        # Primero, validar TODOS los bancos
         for _, row in edited.iterrows():
             id_res = row['id']
+            nuevo_banco = row['banco']
+            
+            # Validar rango
+            if nuevo_banco < 1 or nuevo_banco > capacidad_maxima:
+                nombre = df[df['id'] == id_res]['nombres'].iloc[0]
+                errores.append(f"❌ **{nombre}**: Banco **{nuevo_banco}** fuera de rango (1-{capacidad_maxima})")
+        
+        # Si hay errores, mostrar y DETENER
+        if errores:
+            st.error("❌ **Errores en los bancos:**")
+            for error in errores:
+                st.error(error)
+            st.warning(f"⚠️ Corrige los bancos a valores entre **1 y {capacidad_maxima}**")
+            return  # <--- NO CONTINUAR
+        
+        # Si no hay errores, procesar cambios
+        for _, row in edited.iterrows():
+            id_res = row['id']
+            nuevo_banco = row['banco']
             nuevo_estado = row['asiste']
-            anterior = df[df['id'] == id_res]['asiste'].iloc[0]
-            if nuevo_estado != anterior:
+            
+            anterior_banco = df[df['id'] == id_res]['banco'].iloc[0]
+            anterior_estado = df[df['id'] == id_res]['asiste'].iloc[0]
+            
+            # Verificar cambio de banco
+            if nuevo_banco != anterior_banco:
+                cambios_banco.append((id_res, nuevo_banco))
+            
+            # Verificar cambio de asistencia
+            if nuevo_estado != anterior_estado:
                 if nuevo_estado == "No":
                     inasistencias.append(id_res)
                 cambios.append((id_res, nuevo_estado))
-
-        if not cambios:
+        
+        # ===== PROCESAR CAMBIOS DE BANCO =====
+        errores_banco = []
+        for id_res, nuevo_banco in cambios_banco:
+            r = db.ejecutar("SELECT laboratorio, fecha, hora FROM reservas WHERE id=?", (id_res,), fetch=True)
+            if r:
+                lab, fecha, hora = r[0]
+                r_banco = db.ejecutar("""SELECT COUNT(*) FROM reservas 
+                                            WHERE laboratorio=? AND fecha=? AND hora=? 
+                                            AND banco=? 
+                                            AND activo=1 
+                                            AND id != ?
+                                            AND (asiste != 'No' OR asiste IS NULL OR asiste = '')""", 
+                                         (lab, fecha, hora, nuevo_banco, id_res), fetch=True)
+                if r_banco[0][0] > 0:
+                    nombre = df[df['id'] == id_res]['nombres'].iloc[0]
+                    errores_banco.append(f"❌ **{nombre}**: Banco **{nuevo_banco}** ya ocupado")
+                else:
+                    db.ejecutar("UPDATE reservas SET banco = ? WHERE id = ?", (nuevo_banco, id_res))
+        
+        if errores_banco:
+            for error in errores_banco:
+                st.error(error)
+            return
+        
+        # ===== PROCESAR CAMBIOS DE ASISTENCIA =====
+        if not cambios and not inasistencias and not cambios_banco:
             st.info("Sin cambios")
             return
-
+        
         if inasistencias:
             st.session_state.inasistencias_pendientes = inasistencias
             st.session_state.cambios_pendientes = cambios
@@ -89,9 +168,16 @@ def render_editor_asistencias(df, key):
             for id_res, nuevo_estado in cambios:
                 res.actualizar_asiste(id_res, nuevo_estado, None)
             st.session_state.editor_version += 1
-            st.success(f"{len(cambios)} cambios guardados")
+            
+            mensajes = []
+            if cambios:
+                mensajes.append(f"{len(cambios)} cambios de asistencia")
+            if cambios_banco:
+                mensajes.append(f"{len(cambios_banco)} cambios de banco")
+            st.success(f"✅ {' y '.join(mensajes)} guardados")
             st.rerun()
 
+    # ===== CONFIRMACIÓN DE INASISTENCIAS =====
     if st.session_state.confirmar_inasistencia:
         with st.popover("⚠️ Confirmar inasistencia", use_container_width=True):
             st.warning(f"Estás marcando **{len(st.session_state.inasistencias_pendientes)}** reserva(s) como 'No asistió'.")
@@ -115,7 +201,6 @@ def render_editor_asistencias(df, key):
                     st.session_state.inasistencias_pendientes = []
                     st.session_state.cambios_pendientes = []
                     st.rerun()
-
 # ============================================================
 #  2. ELIMINADOR DE RESERVAS
 # ============================================================
@@ -410,12 +495,14 @@ def mostrar_formulario_agregar_multa(codigo):
 
 def mostrar_perfil_estudiante(codigo):
     """
-    Muestra el perfil completo de un estudiante (multas activas, historial y formulario para agregar).
+    Muestra el perfil completo de un estudiante en formato compacto.
+    Optimizado para reducir reruns innecesarios.
     """
     estudiante = db.ejecutar("SELECT nombres, proyecto FROM estudiantes WHERE codigo=?", (codigo,), fetch=True)
     if estudiante:
         nombre, carrera = estudiante[0]
-        st.write(f"**Nombre:** {nombre}")
+        st.subheader(f"👤 {nombre}")
+        st.write(f"**Código:** {codigo}")
         st.write(f"**Carrera:** {carrera if carrera else 'No registrada'}")
     else:
         st.warning("⚠️ Estudiante no encontrado en la tabla de estudiantes.")
@@ -423,7 +510,7 @@ def mostrar_perfil_estudiante(codigo):
     
     df_multas = multas.obtener_multas_estudiante(codigo)
     if df_multas.empty:
-        st.info("No hay multas registradas para este estudiante.")
+        st.info("📭 No hay multas registradas para este estudiante.")
         mostrar_formulario_agregar_multa(codigo)
         return
     
@@ -432,51 +519,128 @@ def mostrar_perfil_estudiante(codigo):
 
     # ===== MULTAS ACTIVAS =====
     if not df_activas.empty:
-        st.subheader("🔴 Multas activas")
-        for _, m in df_activas.iterrows():
-            st.write(f"**Fecha:** {m['fecha_multa']}")
-            st.write(f"**Motivo:** {m['motivo']}")
-            st.write(f"**Sanción:** {m['sancion'] if m['sancion'] else 'N/A'}")
-            st.write(f"**Técnico que asigna:** {m['tecnico_asigna']}")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                with st.expander("✅ Pagar multa", expanded=False):
-                    tecnico_recibe = st.selectbox(
-                        "Técnico que recibe el pago", 
-                        TECNICOS, 
-                        key=f"tecnico_recibe_{m['id']}"
-                    )
-                    if st.button(f"Confirmar pago #{m['id']}", key=f"confirmar_pago_{m['id']}"):
-                        multas.pagar_multa(m['id'], tecnico_recibe)
-                        st.success("✅ Multa pagada correctamente")
+        st.subheader(f"🔴 Multas activas ({len(df_activas)})")
+        
+        for idx, (_, m) in enumerate(df_activas.iterrows()):
+            # Usar un container para cada multa
+            with st.container():
+                col1, col2, col3 = st.columns([2, 1.2, 0.5])
+                
+                # Columna 1: Información de la multa
+                with col1:
+                    st.write(f"**📅 {m['fecha_multa']}**")
+                    st.write(f"📝 {m['motivo'] if m['motivo'] else 'Sin motivo'}")
+                    if m['sancion']:
+                        st.write(f"⚖️ Sanción: {m['sancion']}")
+                    st.caption(f"👤 Asignada por: {m['tecnico_asigna']}")
+                
+                # Columna 2: Botones de acción
+                with col2:
+                    # Botón Pagar - usar session_state para controlar el modal
+                    key_pagar = f"pagar_modal_{m['id']}"
+                    if st.button(f"💰 Pagar", key=f"pagar_btn_{m['id']}", use_container_width=True):
+                        st.session_state[key_pagar] = not st.session_state.get(key_pagar, False)
                         st.rerun()
-            
-            with col2:
-                if st.button(f"🗑️ Eliminar multa #{m['id']}", key=f"eliminar_{m['id']}"):
-                    multas.eliminar_multa(m['id'])
-                    st.success("🗑️ Multa eliminada")
-                    st.rerun()
-            
-            st.divider()
+                    
+                    # Botón Modificar
+                    key_modificar = f"modificar_modal_{m['id']}"
+                    if st.button(f"✏️ Modificar", key=f"modificar_btn_{m['id']}", use_container_width=True):
+                        st.session_state[key_modificar] = not st.session_state.get(key_modificar, False)
+                        st.rerun()
+                
+                # Columna 3: Botón Eliminar
+                with col3:
+                    key_eliminar = f"eliminar_modal_{m['id']}"
+                    if st.button(f"🗑️", key=f"eliminar_btn_{m['id']}", use_container_width=True):
+                        st.session_state[key_eliminar] = not st.session_state.get(key_eliminar, False)
+                        st.rerun()
+                
+                # ===== MODAL PAGAR =====
+                if st.session_state.get(f"pagar_modal_{m['id']}", False):
+                    with st.expander(f"💰 Pagar multa", expanded=True):
+                        st.write(f"**Motivo:** {m['motivo']}")
+                        if m['sancion']:
+                            st.write(f"**Sanción:** {m['sancion']}")
+                        
+                        tecnico_recibe = st.selectbox(
+                            "Técnico que recibe el pago", 
+                            TECNICOS, 
+                            key=f"tecnico_pago_{m['id']}"
+                        )
+                        
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if st.button(f"✅ Confirmar", key=f"confirmar_pago_{m['id']}"):
+                                multas.pagar_multa(m['id'], tecnico_recibe)
+                                st.session_state[f"pagar_modal_{m['id']}"] = False
+                                st.rerun()
+                        with col_b:
+                            if st.button(f"❌ Cancelar", key=f"cancelar_pago_{m['id']}"):
+                                st.session_state[f"pagar_modal_{m['id']}"] = False
+                                st.rerun()
+                
+                # ===== MODAL MODIFICAR =====
+                if st.session_state.get(f"modificar_modal_{m['id']}", False):
+                    with st.expander(f"✏️ Modificar multa", expanded=True):
+                        nuevo_motivo = st.text_input(
+                            "Motivo", 
+                            value=m['motivo'] if m['motivo'] else "",
+                            key=f"edit_motivo_{m['id']}"
+                        )
+                        nueva_sancion = st.text_input(
+                            "Sanción", 
+                            value=m['sancion'] if m['sancion'] else "",
+                            key=f"edit_sancion_{m['id']}"
+                        )
+                        
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if st.button(f"💾 Guardar", key=f"guardar_edit_{m['id']}"):
+                                db.ejecutar(
+                                    "UPDATE multas SET motivo = ?, sancion = ? WHERE id = ?",
+                                    (nuevo_motivo, nueva_sancion, m['id'])
+                                )
+                                st.session_state[f"modificar_modal_{m['id']}"] = False
+                                st.rerun()
+                        with col_b:
+                            if st.button(f"❌ Cancelar", key=f"cancelar_edit_{m['id']}"):
+                                st.session_state[f"modificar_modal_{m['id']}"] = False
+                                st.rerun()
+                
+                # ===== MODAL ELIMINAR =====
+                if st.session_state.get(f"eliminar_modal_{m['id']}", False):
+                    with st.expander(f"⚠️ Eliminar multa", expanded=True):
+                        st.warning(f"¿Estás seguro de eliminar esta multa?")
+                        st.write(f"**Motivo:** {m['motivo']}")
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if st.button(f"✅ Sí", key=f"confirmar_eliminar_{m['id']}"):
+                                multas.eliminar_multa(m['id'])
+                                st.session_state[f"eliminar_modal_{m['id']}"] = False
+                                st.rerun()
+                        with col_b:
+                            if st.button(f"❌ No", key=f"cancelar_eliminar_{m['id']}"):
+                                st.session_state[f"eliminar_modal_{m['id']}"] = False
+                                st.rerun()
+                
+                st.divider()
     else:
         st.info("✅ No hay multas activas.")
 
     # ===== HISTORIAL DE MULTAS PAGADAS =====
     if not df_pagadas.empty:
-        with st.expander("📜 Historial de multas pagadas"):
+        with st.expander(f"📜 Historial de multas pagadas ({len(df_pagadas)})", expanded=False):
             for _, m in df_pagadas.iterrows():
-                st.write(f"**Fecha de multa:** {m['fecha_multa']}")
-                st.write(f"**Fecha de pago:** {m['fecha_pago']}")
-                st.write(f"**Motivo:** {m['motivo']}")
-                st.write(f"**Sanción:** {m['sancion'] if m['sancion'] else 'N/A'}")
-                st.write(f"**Técnico que recibe:** {m['tecnico_recibe']}")
+                st.write(f"**📅 {m['fecha_multa']}** → Pagado: {m['fecha_pago']}")
+                st.write(f"📝 {m['motivo']}")
+                if m['sancion']:
+                    st.write(f"⚖️ Sanción: {m['sancion']}")
+                st.caption(f"👤 Recibido por: {m['tecnico_recibe']}")
                 st.divider()
 
     # ===== AGREGAR NUEVA MULTA =====
     mostrar_formulario_agregar_multa(codigo)
-
-
+        
 def mostrar_deudores():
     st.subheader("💰 Gestión de Deudores")
     st.caption("Estudiantes con multas activas (pagado = 'NO'). Usa el buscador para encontrar cualquier estudiante.")
@@ -540,7 +704,7 @@ def mostrar_deudores():
             df_detalle = db.fetch_df(query_detalle)
             
             if not df_detalle.empty:
-                csv_data = df_detalle.to_csv(index=False).encode('utf-8')
+                csv_data = df_detalle.to_csv(index=False).encode('utf-8-sig')
                 st.download_button(
                     label="📥 Descargar CSV",
                     data=csv_data,

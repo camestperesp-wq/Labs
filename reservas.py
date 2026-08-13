@@ -252,3 +252,31 @@ def obtener_multas_activas_estudiante(codigo):
     if rows:
         return "\n".join([f"• {row[0]} ({row[1]}) - Sanción: {row[2]}" for row in rows])
     return ""
+def cambiar_banco_reserva(id_res, nuevo_banco):
+    """
+    Cambia el banco de una reserva existente.
+    Verifica que el nuevo banco esté disponible.
+    """
+    # Obtener la reserva actual
+    r = db.ejecutar("SELECT laboratorio, fecha, hora FROM reservas WHERE id=?", (id_res,), fetch=True)
+    if not r:
+        return False, "Reserva no encontrada"
+    
+    lab, fecha, hora = r[0]
+    
+    # Verificar que el nuevo banco esté disponible
+    r = db.ejecutar("""SELECT COUNT(*) FROM reservas 
+                        WHERE laboratorio=? AND fecha=? AND hora=? 
+                        AND banco=? 
+                        AND activo=1 
+                        AND id != ?
+                        AND (asiste != 'No' OR asiste IS NULL OR asiste = '')""", 
+                     (lab, fecha, hora, nuevo_banco, id_res), fetch=True)
+    banco_ocupado = r[0][0] > 0 if r else False
+    
+    if banco_ocupado:
+        return False, f"El banco {nuevo_banco} ya está ocupado en este horario"
+    
+    # Actualizar el banco
+    db.ejecutar("UPDATE reservas SET banco = ? WHERE id = ?", (nuevo_banco, id_res))
+    return True, "Banco actualizado correctamente"

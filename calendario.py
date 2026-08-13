@@ -274,7 +274,7 @@ def mostrar_detalle_celda():
             
             if not df.empty:
                 df_editor = df[['id', 'banco', 'codigo', 'nombres', 'proyecto', 'asiste']].copy()
-                render_editor_asistencias(df_editor, f"detalle_{lab}_{fecha_str}_{hora}")
+                render_editor_asistencias(df_editor, f"detalle_{lab}_{fecha_str}_{hora}", lab)
                 render_eliminar_reserva(df, f"eliminar_detalle_{lab}_{fecha_str}_{hora}")
             else:
                 if es_profesor_asistio and profesor_data:

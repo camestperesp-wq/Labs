@@ -104,7 +104,7 @@ def mostrar_reporte_completo():
             st.dataframe(df, use_container_width=True, hide_index=True)
             st.download_button(
                 "Descargar CSV",
-                df.to_csv(index=False).encode('utf-8'),
+                df.to_csv(index=False).encode('utf-8-sig'),
                 f"reporte_{fecha_desde.strftime('%Y%m%d')}_{fecha_hasta.strftime('%Y%m%d')}.csv",
                 "text/csv",
                 key="labs_descargar_reporte"
@@ -194,7 +194,7 @@ def mostrar_reporte_asistencia_docentes():
         
         st.download_button(
             "Descargar CSV",
-            df.to_csv(index=False).encode('utf-8'),
+            df.to_csv(index=False).encode('utf-8-sig'),
             f"reporte_docentes_{fecha_desde.strftime('%Y%m%d')}_{fecha_hasta.strftime('%Y%m%d')}.csv",
             "text/csv",
             key="doc_descargar_reporte"
