@@ -50,9 +50,10 @@ def render_editor_asistencias(df, key, laboratorio=None):
     
     if laboratorio and laboratorio in LABORATORIOS:
         capacidad_maxima = LABORATORIOS[laboratorio]
+        st.caption(f"📌 Capacidad del laboratorio: **{capacidad_maxima}** bancos (1-{capacidad_maxima})")
     else:
         capacidad_maxima = 99
-        st.warning(f"⚠️ No se pudo detectar el laboratorio. Capacidad predeterminada: 99")
+        st.caption("Si ingresas un número fuera de rango, el sistema mostrará un error al guardar.")
 
     # ===== CONFIGURACIÓN DEL DATA_EDITOR =====
     config = {
@@ -71,10 +72,6 @@ def render_editor_asistencias(df, key, laboratorio=None):
 
     version = st.session_state.editor_version
     editor_key = f"editor_{key}_{version}"
-
-    # ===== MOSTRAR ADVERTENCIA CLARA =====
-    st.warning(f"⚠️ **Rango permitido para banco: 1 a {capacidad_maxima}**")
-    st.caption("Si ingresas un número fuera de rango, el sistema mostrará un error al guardar.")
 
     edited = st.data_editor(
         df,
@@ -109,7 +106,7 @@ def render_editor_asistencias(df, key, laboratorio=None):
             for error in errores:
                 st.error(error)
             st.warning(f"⚠️ Corrige los bancos a valores entre **1 y {capacidad_maxima}**")
-            return  # <--- NO CONTINUAR
+            return
         
         # Si no hay errores, procesar cambios
         for _, row in edited.iterrows():

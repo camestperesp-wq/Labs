@@ -9,6 +9,7 @@ import reportes as rep
 from ui_components import mostrar_horario_general
 from constants import LABORATORIOS, DIAS
 from ui_components import mostrar_horario_general, mostrar_deudores
+from asistencias_pendientes import mostrar_panel_asistencias_pendientes
 
 st.set_page_config(page_title="LABS", layout="wide")
 if "editor_version" not in st.session_state:
@@ -53,8 +54,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("Adicionales")
-
+st.title("GESTOR DE LABORATORIOS")
+mostrar_panel_asistencias_pendientes()
 db.init_db()
 res = utils.actualizar_reservas_vencidas()
 if res:
@@ -78,12 +79,25 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 
 with tab1:
     mostrar_horario_general()
-
 with tab2:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col1:
         if st.button("◀ Semana anterior", key="reserva_semana_prev"):
+            # Guardar el día actual antes de cambiar la semana
+            dia_actual = st.session_state.get("dia_seleccionado_guardado", "Lunes")
+            dia_semana = dia_actual.split(" ")[0]
+            
+            # Cambiar la semana
             st.session_state.labs_semana_inicio -= timedelta(days=7)
+            
+            # Calcular el nuevo día correspondiente
+            lunes = st.session_state.labs_semana_inicio
+            idx_dia = DIAS.index(dia_semana)
+            nueva_fecha = lunes + timedelta(days=idx_dia)
+            nuevo_dia = f"{dia_semana} {nueva_fecha.strftime('%d/%m')}"
+            
+            # Guardar el nuevo día
+            st.session_state.dia_seleccionado_guardado = nuevo_dia
             st.rerun()
     with col2:
         lunes = st.session_state.labs_semana_inicio
@@ -93,7 +107,21 @@ with tab2:
         )
     with col3:
         if st.button("Siguiente semana ▶", key="reserva_semana_next"):
+            # Guardar el día actual antes de cambiar la semana
+            dia_actual = st.session_state.get("dia_seleccionado_guardado", "Lunes")
+            dia_semana = dia_actual.split(" ")[0]
+            
+            # Cambiar la semana
             st.session_state.labs_semana_inicio += timedelta(days=7)
+            
+            # Calcular el nuevo día correspondiente
+            lunes = st.session_state.labs_semana_inicio
+            idx_dia = DIAS.index(dia_semana)
+            nueva_fecha = lunes + timedelta(days=idx_dia)
+            nuevo_dia = f"{dia_semana} {nueva_fecha.strftime('%d/%m')}"
+            
+            # Guardar el nuevo día
+            st.session_state.dia_seleccionado_guardado = nuevo_dia
             st.rerun()
     
     # Calcular fechas de la semana actual
@@ -107,15 +135,42 @@ with tab2:
         fecha_str = fecha.strftime("%d/%m")
         opciones_dias.append(f"{nombre_dia} {fecha_str}")
     
-    dia_seleccionado = st.radio(
-        "Selecciona el día",
-        options=opciones_dias,
-        horizontal=True,
-        key="reserva_dia_selector"
-    )
+    # ===== INICIALIZAR EL DÍA SELECCIONADO =====
+    if "dia_seleccionado_guardado" not in st.session_state:
+        st.session_state.dia_seleccionado_guardado = opciones_dias[0]
+    elif st.session_state.dia_seleccionado_guardado not in opciones_dias:
+        st.session_state.dia_seleccionado_guardado = opciones_dias[0]
     
-    # Extraer el día real del texto seleccionado
-    dia_actual = dia_seleccionado.split(" ")[0]
+    # ===== BOTONES AZULES =====
+    st.write("**Selecciona el día:**")
+    
+    # Crear columnas para los botones
+    cols = st.columns(len(opciones_dias))
+    
+    for i, opcion in enumerate(opciones_dias):
+        with cols[i]:
+            # Si es el día seleccionado, mostrar en azul
+            if opcion == st.session_state.dia_seleccionado_guardado:
+                st.markdown(f"""
+                <div style="
+                    background-color: #007bff;
+                    color: white;
+                    border-radius: 4px;
+                    padding: 8px 12px;
+                    text-align: center;
+                    font-weight: bold;
+                    cursor: default;
+                ">
+                    {opcion}
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                if st.button(opcion, key=f"dia_btn_{i}", use_container_width=True):
+                    st.session_state.dia_seleccionado_guardado = opcion
+                    st.rerun()
+    
+    # Usar el día guardado
+    dia_actual = st.session_state.dia_seleccionado_guardado.split(" ")[0]
     
     cal.mostrar_calendario_interactivo(dia_actual)
     cal.mostrar_detalle_celda()

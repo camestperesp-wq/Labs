@@ -10,7 +10,7 @@ LABORATORIOS = {
     "604": 8,
     "607": 10,
     "Maquinas A": 4,
-    "Maquinas B": 5,
+    "Maquinas B": 8,
     "Comunicaciones": 8,
     "Automatizacion": 6,
     "Control": 6
