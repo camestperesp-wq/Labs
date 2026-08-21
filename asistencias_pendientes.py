@@ -7,36 +7,20 @@ import reservas as res
 from utils import parse_fecha_a_espanol
 
 def obtener_hora_inicio(hora_str):
-    """
-    Extrae la hora de inicio de un bloque horario.
-    Ej: "08:00-10:00" -> 8
-    """
     try:
         return int(hora_str.split('-')[0].split(':')[0])
     except:
         return 0
 
 def obtener_asistencias_pendientes():
-    """
-    Obtiene TODAS las reservas del día actual que no tienen asistencia marcada.
-    Incluye ESTUDIANTES (de reservas) y DOCENTES (del horario fijo).
-    SOLO muestra los que YA PASARON su hora de inicio.
-    """
     hoy = datetime.now().date().strftime("%Y-%m-%d")
     dia_semana = parse_fecha_a_espanol(hoy)
     hora_actual = datetime.now().hour
     
-    # ===== 1. OBTENER ESTUDIANTES PENDIENTES (de reservas) =====
+    # ===== ESTUDIANTES =====
     query_estudiantes = """
         SELECT 
-            id,
-            fecha,
-            hora,
-            laboratorio,
-            banco,
-            codigo,
-            nombres,
-            proyecto,
+            id, fecha, hora, laboratorio, banco, codigo, nombres, proyecto,
             'Estudiante' as tipo
         FROM reservas
         WHERE (asiste IS NULL OR asiste = '')
@@ -46,18 +30,12 @@ def obtener_asistencias_pendientes():
     """
     df_estudiantes = db.fetch_df(query_estudiantes, (hoy,))
     
-    # Filtrar estudiantes por hora (solo los que ya pasaron)
     if not df_estudiantes.empty:
         df_estudiantes = df_estudiantes[df_estudiantes['hora'].apply(obtener_hora_inicio) <= hora_actual]
     
-    # ===== 2. OBTENER DOCENTES DEL HORARIO FIJO =====
+    # ===== DOCENTES =====
     query_docentes = """
-        SELECT 
-            dia_semana,
-            hora,
-            laboratorio,
-            asignatura,
-            profesor
+        SELECT dia_semana, hora, laboratorio, asignatura, profesor
         FROM horario_fijo
         WHERE dia_semana = ?
         AND profesor IS NOT NULL 
@@ -66,11 +44,9 @@ def obtener_asistencias_pendientes():
     """
     df_horario = db.fetch_df(query_docentes, (dia_semana,))
     
-    # Filtrar docentes por hora (solo los que ya pasaron)
     if not df_horario.empty:
         df_horario = df_horario[df_horario['hora'].apply(obtener_hora_inicio) <= hora_actual]
     
-    # Verificar cuáles ya marcaron asistencia
     docentes_pendientes = []
     if not df_horario.empty:
         for _, row in df_horario.iterrows():
@@ -101,7 +77,7 @@ def obtener_asistencias_pendientes():
     
     df_docentes = pd.DataFrame(docentes_pendientes) if docentes_pendientes else pd.DataFrame()
     
-    # ===== 3. COMBINAR =====
+    # ===== COMBINAR =====
     if not df_estudiantes.empty and not df_docentes.empty:
         df_combinado = pd.concat([df_estudiantes, df_docentes], ignore_index=True)
     elif not df_estudiantes.empty:
@@ -111,30 +87,21 @@ def obtener_asistencias_pendientes():
     else:
         df_combinado = pd.DataFrame()
     
-    # Ordenar por hora
     if not df_combinado.empty:
         df_combinado = df_combinado.sort_values('hora')
     
     return df_combinado
 
 def contar_asistencias_pendientes():
-    """
-    Retorna el número de asistencias pendientes del día actual.
-    """
     pendientes = obtener_asistencias_pendientes()
     return len(pendientes)
 
 def mostrar_panel_asistencias_pendientes():
-    """
-    Muestra un panel con el contador de asistencias pendientes del día actual.
-    La lista de pendientes está dentro de un expander para no ocupar espacio.
-    """
     pendientes = obtener_asistencias_pendientes()
     total_pendientes = len(pendientes)
     hora_actual = datetime.now().strftime("%H:%M")
     fecha_hoy = datetime.now().strftime("%d/%m/%Y")
     
-    # Contar cuántos son docentes y estudiantes
     if not pendientes.empty:
         docentes_pendientes = len(pendientes[pendientes['tipo'] == 'Docente'])
         estudiantes_pendientes = len(pendientes[pendientes['tipo'] == 'Estudiante'])
@@ -142,17 +109,11 @@ def mostrar_panel_asistencias_pendientes():
         docentes_pendientes = 0
         estudiantes_pendientes = 0
     
-    # ===== CONTADOR VISUAL =====
     st.divider()
     
     if total_pendientes > 0:
         st.markdown(f"""
-        <div style="
-            background-color: #fff3cd;
-            border: 1px solid #ffc107;
-            border-radius: 8px;
-            padding: 12px 16px;
-        ">
+        <div style="background-color: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px 16px;">
             <h4 style="margin: 0; color: #856404;">⚠️ Asistencias Pendientes - Hoy ({fecha_hoy})</h4>
             <p style="margin: 4px 0 0 0; color: #856404;">
                 Total: <strong>{total_pendientes}</strong> 
@@ -164,12 +125,7 @@ def mostrar_panel_asistencias_pendientes():
         """, unsafe_allow_html=True)
     else:
         st.markdown(f"""
-        <div style="
-            background-color: #d4edda;
-            border: 1px solid #28a745;
-            border-radius: 8px;
-            padding: 12px 16px;
-        ">
+        <div style="background-color: #d4edda; border: 1px solid #28a745; border-radius: 8px; padding: 12px 16px;">
             <h4 style="margin: 0; color: #155724;">✅ Todo al día</h4>
             <p style="margin: 4px 0 0 0; color: #155724;">
                 No hay asistencias pendientes de marcar para hoy.
@@ -178,7 +134,6 @@ def mostrar_panel_asistencias_pendientes():
         </div>
         """, unsafe_allow_html=True)
     
-    # ===== LISTA DENTRO DE EXPANDER =====
     if total_pendientes > 0:
         with st.expander(f"📋 Ver y marcar asistencias ({total_pendientes} pendientes)", expanded=False):
             st.caption("Haz clic en 'Asistió' o 'No asistió' para cada persona")
@@ -197,13 +152,8 @@ def mostrar_panel_asistencias_pendientes():
                     if st.button("Asistió", key=f"asi_{idx}_{row['id']}", use_container_width=True):
                         if row['codigo'] == 'PROFESOR':
                             res.registrar_asistencia_docente(
-                                row['fecha'],
-                                row['hora'],
-                                row['laboratorio'],
-                                row['nombres'],
-                                row['proyecto'],
-                                "Si",
-                                None
+                                row['fecha'], row['hora'], row['laboratorio'],
+                                row['nombres'], row['proyecto'], "Si", None
                             )
                         else:
                             res.actualizar_asiste(row['id'], "Si", None)
@@ -213,27 +163,19 @@ def mostrar_panel_asistencias_pendientes():
                         st.session_state[f"tecnico_no_{idx}_{row['id']}"] = True
                         st.rerun()
                 
-                # Modal para técnico
                 if st.session_state.get(f"tecnico_no_{idx}_{row['id']}", False):
                     with st.popover(f"Confirmar inasistencia", use_container_width=True):
                         st.warning(f"Marcar como 'No asistió' a {row['nombres']}")
                         tecnico = st.selectbox(
-                            "Técnico", 
-                            TECNICOS, 
-                            key=f"tecnico_confirm_{idx}_{row['id']}"
+                            "Técnico", TECNICOS, key=f"tecnico_confirm_{idx}_{row['id']}"
                         )
                         col1, col2 = st.columns(2)
                         with col1:
                             if st.button("Confirmar", key=f"confirm_no_{idx}_{row['id']}"):
                                 if row['codigo'] == 'PROFESOR':
                                     res.registrar_asistencia_docente(
-                                        row['fecha'],
-                                        row['hora'],
-                                        row['laboratorio'],
-                                        row['nombres'],
-                                        row['proyecto'],
-                                        "No",
-                                        tecnico
+                                        row['fecha'], row['hora'], row['laboratorio'],
+                                        row['nombres'], row['proyecto'], "No", tecnico
                                     )
                                 else:
                                     res.actualizar_asiste(row['id'], "No", tecnico)

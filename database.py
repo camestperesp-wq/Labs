@@ -2,7 +2,7 @@
 
 import sqlite3
 import pandas as pd
-
+import streamlit as st
 DB_PATH = 'mi_agenda.db'
 
 def get_connection():
@@ -15,6 +15,20 @@ def ejecutar(query, params=(), fetch=False):
         if fetch:
             return c.fetchall()
         conn.commit()
+
+@st.cache_data(ttl=300)  # Cache por 5 minutos
+def fetch_df_cached(query, params=()):
+    """
+    Versión cacheada de fetch_df.
+    """
+    with get_connection() as conn:
+        return pd.read_sql_query(query, conn, params=params)
+
+def fetch_df(query, params=()):
+    """
+    Wrapper para fetch_df con cache.
+    """
+    return fetch_df_cached(query, params)
 
 def fetch_df(query, params=()):
     with get_connection() as conn:

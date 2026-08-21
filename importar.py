@@ -20,8 +20,20 @@ DIAS_MAP = {
     "DOMINGO": "Domingo"
 }
 
+# ===== MAPEO COMPLETO DE TODOS LOS LABORATORIOS =====
 MAPEO_LABS = {
-    # Solo los laboratorios de física (para este script)
+    # Laboratorios principales
+    "LABORATORIO DE INSTRUMENTACION ELECTRONICA CAP(36)": "602",
+    "LABORATORIO ELECTRONICA A CAP(24)": "603",
+    "LABORATORIO ELECTRONICA B CAP(24)": "604",
+    "LABORATORIO DE MAQUINAS ELECTRICAS A CAP(24)": "Maquinas A",
+    "LABORATORIO MAQUINAS ELECTRICAS B CAP(18)": "Maquinas B",
+    "LABORATORIO DE CIRCUITOS ELECTRICOS CAP(21)": "607",
+    "LABORATORIO DE COMUNICACIONES CAP(24)": "Comunicaciones",
+    "LABORATORIO DE AUTOMATIZACION CAP(12)": "Automatizacion",
+    "LABORATORIO DE CONTROL CAP(18)": "Control",
+    
+    # Laboratorios de física
     "LABORATORIO 1 CAP(31)": "FLU 101",
     "LABORATORIO 2 CAP(31)": "PRO 102",
     "LABORATORIO 3 CAP(31)": "MEC 103",
@@ -47,6 +59,7 @@ MAPEO_CARRERAS = {
     "INGENIERIA DE SISTEMAS": "Ing. De Sistema",
     "INGENIERIA INDUSTRIAL": "Ing. Industrial",
     "INGENIERIA CATASTRAL": "Ing. Catastral",
+    "INGENIERIA CATASTRAL Y GEODESIA": "Ing. Catastral",
     "POSGRADOS": "Posgrados"
 }
 
@@ -97,7 +110,23 @@ def obtener_numero_hora(hora_str):
         return 0
 
 def agrupar_por_pares(df):
+    """
+    Agrupa horas consecutivas en bloques de 2 horas.
+    Incluye la columna MONITOR.
+    """
     registros = []
+    
+    # ===== DETECCIÓN FLEXIBLE DE MONITOR =====
+    col_monitor = None
+    for col in df.columns:
+        if col.upper() == 'MONITOR':
+            col_monitor = col
+            break
+    
+    if col_monitor:
+        print(f"✅ Columna 'MONITOR' detectada como: '{col_monitor}'")
+    else:
+        print("ℹ️ Columna 'MONITOR' no encontrada. Se usará cadena vacía.")
     
     for _, row in df.iterrows():
         lab = mapear_laboratorio(row['Salón'])
@@ -112,23 +141,33 @@ def agrupar_por_pares(df):
         if 'Proyecto' in df.columns:
             carrera = extraer_y_mapear_carrera(row.get('Proyecto', ''))
         
+        # Leer MONITOR
+        monitor = ""
+        if col_monitor:
+            monitor_val = row.get(col_monitor, '')
+            if pd.notna(monitor_val):
+                monitor = str(monitor_val).strip()
+        
         registros.append({
             'dia': normalizar_dia(row['Día']),
             'hora': hora,
             'laboratorio': lab,
             'asignatura': formatear_asignatura(row['Asignatura'], row['Grupo']),
             'profesor': row['Docente'] if pd.notna(row['Docente']) else "",
-            'carrera': carrera
+            'carrera': carrera,
+            'monitor': monitor
         })
     
+    # Agrupar por clave (incluyendo monitor)
     grupos = defaultdict(list)
     for reg in registros:
-        clave = (reg['dia'], reg['laboratorio'], reg['asignatura'], reg['profesor'], reg['carrera'])
+        clave = (reg['dia'], reg['laboratorio'], reg['asignatura'], 
+                 reg['profesor'], reg['carrera'], reg['monitor'])
         grupos[clave].append(reg)
     
     resultado = []
     for clave, items in grupos.items():
-        dia, lab, asignatura, profesor, carrera = clave
+        dia, lab, asignatura, profesor, carrera, monitor = clave
         items.sort(key=lambda x: obtener_numero_hora(x['hora']))
         
         i = 0
@@ -149,7 +188,8 @@ def agrupar_por_pares(df):
                         'laboratorio': lab,
                         'asignatura': asignatura,
                         'profesor': profesor,
-                        'carrera': carrera
+                        'carrera': carrera,
+                        'monitor': monitor
                     })
                     i = j + 1
                     encontrado_par = True
@@ -163,19 +203,33 @@ def agrupar_por_pares(df):
                     'laboratorio': lab,
                     'asignatura': asignatura,
                     'profesor': profesor,
-                    'carrera': carrera
+                    'carrera': carrera,
+                    'monitor': monitor
                 })
                 i += 1
     
-    return resultado
+    # ===== ELIMINAR DUPLICADOS =====
+    seen = set()
+    resultado_limpio = []
+    for reg in resultado:
+        clave = (reg['dia'], reg['hora'], reg['laboratorio'], 
+                 reg['asignatura'], reg['carrera'], reg['monitor'], reg['profesor'])
+        if clave not in seen:
+            seen.add(clave)
+            resultado_limpio.append(reg)
+    
+    if len(resultado) != len(resultado_limpio):
+        print(f"   ⚠️ Eliminados {len(resultado) - len(resultado_limpio)} duplicados")
+    
+    return resultado_limpio
 
 # ============================================================
 #  FUNCIÓN PRINCIPAL
 # ============================================================
 
-def reimportar_fisica():
+def importar_horario():
     print("=" * 60)
-    print("🧹 REIMPORTANDO LABORATORIOS DE FÍSICA")
+    print("📥 IMPORTANDO HORARIO DESDE EXCEL")
     print("=" * 60)
 
     # 1. Leer Excel
@@ -186,58 +240,60 @@ def reimportar_fisica():
         return
 
     print(f"✅ {len(df)} registros leídos")
+    print(f"📋 Columnas disponibles: {list(df.columns)}")
 
-    # 2. Mostrar laboratorios de física en el Excel
-    labs_fisica_excel = []
+    # 2. Mostrar laboratorios encontrados en el Excel
+    labs_encontrados = []
     for lab in df['Salón'].unique():
-        if mapear_laboratorio(lab):
-            labs_fisica_excel.append(lab)
+        mapeado = mapear_laboratorio(lab)
+        if mapeado:
+            labs_encontrados.append((lab, mapeado))
     
-    print("\n📋 Laboratorios de física encontrados en el Excel:")
-    for lab in labs_fisica_excel:
-        print(f"   - {lab} → {mapear_laboratorio(lab)}")
+    print("\n📋 Laboratorios encontrados en el Excel:")
+    for lab, mapeado in sorted(set(labs_encontrados), key=lambda x: x[1]):
+        print(f"   - {lab} → {mapeado}")
 
     # 3. Conectar a la BD
     with sqlite3.connect('mi_agenda.db') as conn:
         c = conn.cursor()
         
-        # 4. ELIMINAR SOLO LOS REGISTROS DE LABORATORIOS DE FÍSICA
-        labs_fisica_sistema = ["FLU 101", "PRO 102", "MEC 103", "NEW 408", "ELE 509", "OND 510"]
+        # ===== ELIMINAR SOLO LABORATORIOS QUE ESTÁN EN EL EXCEL =====
+        labs_a_eliminar = list(set([mapeado for _, mapeado in labs_encontrados]))
         
         eliminados = 0
-        for lab in labs_fisica_sistema:
+        for lab in labs_a_eliminar:
             c.execute("DELETE FROM horario_fijo WHERE laboratorio = ?", (lab,))
             eliminados += c.rowcount
         
-        print(f"\n🗑️ Eliminados {eliminados} registros de laboratorios de física")
+        print(f"\n🗑️ Eliminados {eliminados} registros de los laboratorios: {', '.join(labs_a_eliminar)}")
 
-        # 5. Procesar y agrupar datos del Excel
+        # 4. Procesar y agrupar datos del Excel
         print("\n🔄 Procesando datos del Excel...")
         registros = agrupar_por_pares(df)
         print(f"   ✅ {len(registros)} bloques generados")
 
-        # 6. Insertar solo los que son de física
+        # 5. Insertar todos los registros
         insertados = 0
+        ignorados = 0
         errores = 0
-        
-        labs_validos_fisica = labs_fisica_sistema
-        
-        print("\n📥 Insertando registros de física...")
+
+        print("\n📥 Insertando registros...")
         for reg in registros:
             try:
-                if reg['laboratorio'] not in labs_validos_fisica:
-                    continue  # Saltar los que no son de física
-                
                 c.execute("""
-                    INSERT INTO horario_fijo 
+                    INSERT OR IGNORE INTO horario_fijo 
                     (dia_semana, hora, laboratorio, asignatura, carrera, monitor, profesor)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (reg['dia'], reg['hora'], reg['laboratorio'], 
-                      reg['asignatura'], reg['carrera'], "", reg['profesor']))
-                insertados += 1
+                      reg['asignatura'], reg['carrera'], reg['monitor'], reg['profesor']))
                 
-                if insertados % 10 == 0:
-                    print(f"   ... {insertados} insertados")
+                if c.rowcount > 0:
+                    insertados += 1
+                else:
+                    ignorados += 1
+                
+                if (insertados + ignorados) % 10 == 0:
+                    print(f"   ... {insertados} insertados, {ignorados} ignorados")
                 
             except Exception as e:
                 print(f"   ❌ Error: {e}")
@@ -248,10 +304,12 @@ def reimportar_fisica():
     print("\n" + "=" * 60)
     print("📊 RESUMEN")
     print("=" * 60)
-    print(f"🗑️ Eliminados: {eliminados}")
+    print(f"🗑️ Eliminados: {eliminados} (solo laboratorios del Excel)")
     print(f"✅ Insertados: {insertados}")
+    print(f"⏭️ Ignorados (duplicados): {ignorados}")
     print(f"⚠️ Errores: {errores}")
+    print("\n💡 Los espacios 'Adicional' NO se eliminan")
     print("\n🎉 ¡Listo!")
 
 if __name__ == "__main__":
-    reimportar_fisica()
+    importar_horario()

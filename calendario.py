@@ -358,7 +358,12 @@ def mostrar_detalle_celda():
                 if codigo:
                     estudiante_info = est.buscar_estudiante(codigo)
                     if estudiante_info:
+                        # ===== CONTADOR DE RESERVAS DEL DÍA =====
+                        reservas_hoy = est.contar_reservas_hoy(codigo)
+                        hoy = datetime.now().date().strftime("%d/%m/%Y")
+                        
                         st.success(f"👤 **{estudiante_info[1]}**")
+                        st.write(f"📋 **Reservas de hoy ({hoy}):** {reservas_hoy}")
                         if estudiante_info[2]:
                             st.info(f"📚 {estudiante_info[2]}")
                         # Verificar multas activas
@@ -532,3 +537,4 @@ def mostrar_formulario_asistencia_docente():
         if st.button("❌ Cancelar", key="cancelar_asistencia", use_container_width=True):
             del st.session_state.asistencia_docente
             st.rerun()
+            

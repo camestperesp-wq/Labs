@@ -95,11 +95,14 @@ def render_editor_asistencias(df, key, laboratorio=None):
             id_res = row['id']
             nuevo_banco = row['banco']
             
-            # Validar rango
+            # ===== EXCLUIR BANCO 0 DE LA VALIDACIÓN =====
+            if nuevo_banco == 0:
+                continue  # Saltar reservas de profesor (banco 0)
+            
+            # Validar rango (solo para bancos > 0)
             if nuevo_banco < 1 or nuevo_banco > capacidad_maxima:
                 nombre = df[df['id'] == id_res]['nombres'].iloc[0]
                 errores.append(f"❌ **{nombre}**: Banco **{nuevo_banco}** fuera de rango (1-{capacidad_maxima})")
-        
         # Si hay errores, mostrar y DETENER
         if errores:
             st.error("❌ **Errores en los bancos:**")
@@ -278,7 +281,6 @@ def render_eliminar_reserva(df, key):
 # ============================================================
 #  3. HORARIO GENERAL (SIN POPOVER)
 # ============================================================
-
 def mostrar_horario_general():
     st.subheader("📅 Horario General de Laboratorios")
     st.caption("Los colores indican la carrera. Selecciona una celda y haz clic en 'Editar celda' para modificarla.")
@@ -309,30 +311,33 @@ def mostrar_horario_general():
         key="horario_dia"
     )
 
-    # ===== USAR LABS_ORDEN_HORARIO Y LABS_HORARIO =====
     labs_keys = [lab for lab in LABS_ORDEN_HORARIO if lab in LABS_HORARIO]
 
     if "horario_editar" not in st.session_state:
         st.session_state.horario_editar = None
 
-    # ===== CONSTRUIR TABLA CON ENCABEZADOS FIJOS =====
-    html = """
-    <div style="max-height: 550px; overflow-y: auto; border: 1px solid #ddd; border-radius: 5px;">
-    <table style="width:100%; border-collapse: collapse; font-family: sans-serif; font-size: 0.85rem;">
+    # ===== CONSTRUIR TABLA CON ANCHO FIJO =====
+    num_labs = len(labs_keys)
+    # ===== ANCHO FIJO EN PÍXELES =====
+    ancho_columna = "150px"
+    
+    html = f"""
+    <div style="max-height: 550px; overflow: auto; border: 1px solid #ddd; border-radius: 5px;">
+    <table style="width:100%; border-collapse: collapse; font-family: sans-serif; font-size: 0.8rem; table-layout: fixed;">
     <thead>
     <tr>
-        <th style="position: sticky; top: 0; background-color: #f0f0f0; z-index: 10; border:1px solid #ddd; padding:8px; text-align:center; font-weight:bold;">Hora</th>
+        <th style="position: sticky; top: 0; background-color: #f0f0f0; z-index: 10; border:1px solid #ddd; padding:8px; text-align:center; font-weight:bold; width:{ancho_columna}; min-width:{ancho_columna};">Hora</th>
     """
 
     for lab in labs_keys:
         html += f"""
-        <th style="position: sticky; top: 0; background-color: #f0f0f0; z-index: 10; border:1px solid #ddd; padding:8px; text-align:center; font-weight:bold;">{LABS_NAMES_HORARIO[lab]}</th>
+        <th style="position: sticky; top: 0; background-color: #f0f0f0; z-index: 10; border:1px solid #ddd; padding:8px; text-align:center; font-weight:bold; width:{ancho_columna}; min-width:{ancho_columna}; word-wrap:break-word; font-size:0.75rem;">{LABS_NAMES_HORARIO[lab]}</th>
         """
 
     html += "</tr></thead><tbody>"
 
     for hora in HORAS:
-        html += f"<tr><td style='border:1px solid #ddd; padding:8px; font-weight:bold; text-align:center; background-color:#f9f9f9;'>{hora}</td>"
+        html += f"<tr><td style='border:1px solid #ddd; padding:8px; font-weight:bold; text-align:center; background-color:#f9f9f9; width:{ancho_columna}; min-width:{ancho_columna};'>{hora}</td>"
         for lab in labs_keys:
             celda = hf.get_horario_celda(dia_seleccionado, hora, lab)
             
@@ -343,7 +348,7 @@ def mostrar_horario_general():
                 texto = f"""
                     <strong>{celda['asignatura']}</strong><br>
                     {carrera}<br>
-                    <span style='font-size:0.8rem;'>
+                    <span style='font-size:0.7rem;'>
                         Monitor: {celda['monitor']}<br>
                         Prof: {celda['profesor']}
                     </span>
@@ -352,10 +357,14 @@ def mostrar_horario_general():
                 html += f"""
                 <td style='
                     border:1px solid #ddd; 
-                    padding:8px; 
+                    padding:6px; 
                     background-color:{color_fondo};
                     text-align:center;
                     vertical-align:middle;
+                    width:{ancho_columna};
+                    min-width:{ancho_columna};
+                    word-wrap:break-word;
+                    font-size:0.75rem;
                 '>
                     {texto}
                 </td>
@@ -364,10 +373,14 @@ def mostrar_horario_general():
                 html += f"""
                 <td style='
                     border:1px solid #ddd; 
-                    padding:8px; 
+                    padding:6px; 
                     background-color:#E8F5E9;
                     text-align:center;
                     vertical-align:middle;
+                    width:{ancho_columna};
+                    min-width:{ancho_columna};
+                    word-wrap:break-word;
+                    font-size:0.75rem;
                 '>
                     🟢 Libre
                 </td>
@@ -473,7 +486,7 @@ def mostrar_formulario_agregar_multa(codigo):
             )
         with col2:
             motivo = st.text_area("Motivo", height=80)
-            sancion = st.text_input("Sanción (opcional)")
+            sancion = st.text_input("Sanción")
         
         if st.form_submit_button("💾 Guardar multa"):
             if not motivo:
@@ -637,7 +650,6 @@ def mostrar_perfil_estudiante(codigo):
 
     # ===== AGREGAR NUEVA MULTA =====
     mostrar_formulario_agregar_multa(codigo)
-        
 def mostrar_deudores():
     st.subheader("💰 Gestión de Deudores")
     st.caption("Estudiantes con multas activas (pagado = 'NO'). Usa el buscador para encontrar cualquier estudiante.")
@@ -660,7 +672,7 @@ def mostrar_deudores():
     else:
         df_filtrado = df_deudores
 
-    # ===== MOSTRAR TABLA DE DEUDORES (SOLO RESUMEN) =====
+    # ===== MOSTRAR TABLA DE DEUDORES (SOLO RESUMEN - ACTIVOS) =====
     if not df_filtrado.empty:
         st.subheader("📋 Lista de deudores")
         st.dataframe(
@@ -679,10 +691,10 @@ def mostrar_deudores():
         st.divider()
         col1, col2 = st.columns([3, 1])
         with col1:
-            st.subheader("📊 Reporte detallado de deudores")
-            st.caption("Descarga un CSV con todas las multas activas (fechas, motivos, sanciones, técnicos).")
+            st.subheader("📊 Reporte detallado de multas")
+            st.caption("Descarga un CSV con TODAS las multas (activas y pagadas) con todos los detalles.")
         with col2:
-            # Generar el CSV con detalle completo
+            # ===== GENERAR CSV CON TODAS LAS MULTAS (ACTIVAS Y PAGADAS) =====
             query_detalle = """
                 SELECT 
                     m.codigo_estudiante,
@@ -692,10 +704,10 @@ def mostrar_deudores():
                     m.motivo,
                     m.sancion,
                     m.tecnico_asigna,
+                    m.tecnico_recibe,
                     m.pagado
                 FROM multas m
                 LEFT JOIN estudiantes e ON m.codigo_estudiante = e.codigo
-                WHERE m.pagado = 'NO'
                 ORDER BY e.nombres, m.fecha_multa DESC
             """
             df_detalle = db.fetch_df(query_detalle)
@@ -705,11 +717,13 @@ def mostrar_deudores():
                 st.download_button(
                     label="📥 Descargar CSV",
                     data=csv_data,
-                    file_name=f"deudores_detalle_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    file_name=f"reporte_multas_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime="text/csv",
                     key="descargar_deudores_detalle",
                     use_container_width=True
                 )
+
+    # ===== RESTO DEL CÓDIGO EXISTENTE (búsqueda y perfiles) =====
     if search_term and df_filtrado.empty:
         st.info("🔍 El estudiante no tiene multas activas. Buscando en la base de datos de estudiantes...")
         df_estudiantes = multas.buscar_estudiantes(search_term)
@@ -751,4 +765,4 @@ def mostrar_deudores():
         if df_deudores.empty:
             st.info("🎉 No hay deudores. Usa el buscador para gestionar multas de estudiantes específicos.")
         else:
-            st.caption("💡 Usa el buscador para ver el historial completo de un estudiante.")    
+            st.caption("💡 Usa el buscador para ver el historial completo de un estudiante.")
