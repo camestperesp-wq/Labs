@@ -345,7 +345,7 @@ def mostrar_horario_general():
         """
         <div class="labs-section-title">
             <h2>Horario General de Laboratorios</h2>
-            <p>Los colores indican la carrera. Haz clic derecho sobre una celda del horario para editarla.</p>
+            <p>Los colores indican la carrera. Haz clic derecho sobre una celda para editarla.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -560,7 +560,7 @@ def mostrar_horario_general():
                 """
                 
                 html += f"""
-                <td class='horario-editable-cell' {data_attrs} style='
+                <td class='horario-editable-cell' tabindex='0' aria-haspopup='menu' aria-label='Editar {html_lib.escape(LABS_NAMES_HORARIO[lab], quote=True)}, {html_lib.escape(hora, quote=True)}' {data_attrs} style='
                     border:1px solid #d8dee8; 
                     padding:8px; 
                     background-color:{color_fondo};
@@ -578,7 +578,7 @@ def mostrar_horario_general():
                 """
             else:
                 html += f"""
-                <td class='horario-editable-cell' {data_attrs} style='
+                <td class='horario-editable-cell' tabindex='0' aria-haspopup='menu' aria-label='Editar {html_lib.escape(LABS_NAMES_HORARIO[lab], quote=True)}, {html_lib.escape(hora, quote=True)}' {data_attrs} style='
                     border:1px solid #d8dee8; 
                     padding:8px; 
                     background-color:#f8fafc;
@@ -680,6 +680,9 @@ def mostrar_horario_general():
                 if (window.parent.__horarioScrollCleanup) {
                     window.parent.__horarioScrollCleanup();
                 }
+                if (window.parent.__horarioContextCleanup) {
+                    window.parent.__horarioContextCleanup();
+                }
 
                 let syncingScroll = false;
                 function syncHorizontal(from, to) {
@@ -709,49 +712,59 @@ def mostrar_horario_general():
                     window.parent.__horarioScrollCleanup = null;
                 };
 
-                let menu = doc.getElementById("horario-context-menu");
-                if (menu && menu.dataset.version !== horarioUiVersion) {
-                    menu.remove();
-                    menu = null;
-                }
-                if (!menu) {
-                    menu = doc.createElement("div");
+                // Streamlit reemplaza la tabla durante cada rerender. Los controles
+                // insertados en document.body deben recrearse para no conservar
+                // listeners que apunten a celdas de un render anterior.
+                const previousMenu = doc.getElementById("horario-context-menu");
+                if (previousMenu) previousMenu.remove();
+                let menu = doc.createElement("div");
                     menu.id = "horario-context-menu";
                     menu.dataset.version = horarioUiVersion;
-                    menu.innerHTML = "<button type='button'>Editar celda</button>";
+                    menu.setAttribute("role", "menu");
+                    menu.setAttribute("aria-label", "Acciones de la celda");
+                    menu.innerHTML = "<button type='button' role='menuitem' data-menu-action='editar'>Editar</button>";
                     menu.style.position = "fixed";
                     menu.style.display = "none";
                     menu.style.zIndex = "999999";
                     menu.style.background = "#ffffff";
                     menu.style.border = "1px solid #e2d8cb";
-                    menu.style.borderRadius = "8px";
-                    menu.style.boxShadow = "0 12px 28px rgba(43,31,20,0.18)";
-                    menu.style.padding = "0.35rem";
-                    menu.style.minWidth = "150px";
-                    menu.querySelector("button").style.display = "block";
-                    menu.querySelector("button").style.width = "100%";
-                    menu.querySelector("button").style.boxSizing = "border-box";
-                    menu.querySelector("button").style.border = "0";
-                    menu.querySelector("button").style.borderRadius = "6px";
-                    menu.querySelector("button").style.padding = "0.6rem 0.75rem";
-                    menu.querySelector("button").style.background = "#f5f6f8";
-                    menu.querySelector("button").style.color = "#731116";
-                    menu.querySelector("button").style.fontWeight = "800";
-                    menu.querySelector("button").style.cursor = "pointer";
-                    doc.body.appendChild(menu);
-                }
+                    menu.style.borderRadius = "10px";
+                    menu.style.boxShadow = "0 14px 34px rgba(43,31,20,0.20)";
+                    menu.style.padding = "0.3rem";
+                    menu.style.minWidth = "132px";
+                    menu.querySelectorAll("button").forEach(function (button) {
+                        Object.assign(button.style, {display:"block", width:"100%", boxSizing:"border-box", border:"0", borderRadius:"6px", padding:"0.58rem 0.72rem", background:"#ffffff", color:"#731116", fontWeight:"700", textAlign:"left", cursor:"pointer"});
+                        button.addEventListener("mouseenter", function () { this.style.background = "#f5f6f8"; });
+                        button.addEventListener("mouseleave", function () { this.style.background = "#ffffff"; });
+                    });
+                doc.body.appendChild(menu);
 
-                function hideMenu() {
+                function hideMenu(restoreFocus) {
                     menu.style.display = "none";
+                    if (restoreFocus && menu.currentCell) menu.currentCell.focus();
                 }
 
-                let modal = doc.getElementById("horario-edit-modal");
-                if (modal && modal.dataset.version !== horarioUiVersion) {
-                    modal.remove();
-                    modal = null;
+                function showMenu(cell, clientX, clientY) {
+                    menu.currentCell = cell;
+                    menu.style.left = clientX + "px";
+                    menu.style.top = clientY + "px";
+                    menu.style.display = "block";
+
+                    // El punto de anclaje siempre es el cursor. Solo desplazamos
+                    // el menú cuando el borde de la ventana impediría verlo.
+                    const rect = menu.getBoundingClientRect();
+                    if (rect.right > doc.documentElement.clientWidth - 8) {
+                        menu.style.left = Math.max(8, clientX - rect.width) + "px";
+                    }
+                    if (rect.bottom > doc.documentElement.clientHeight - 8) {
+                        menu.style.top = Math.max(8, clientY - rect.height) + "px";
+                    }
+                    menu.querySelector("button").focus();
                 }
-                if (!modal) {
-                    modal = doc.createElement("div");
+
+                const previousModal = doc.getElementById("horario-edit-modal");
+                if (previousModal) previousModal.remove();
+                let modal = doc.createElement("div");
                     modal.id = "horario-edit-modal";
                     modal.dataset.version = horarioUiVersion;
                     modal.style.position = "fixed";
@@ -795,8 +808,7 @@ def mostrar_horario_general():
                             </div>
                         </div>
                     `;
-                    doc.body.appendChild(modal);
-                }
+                doc.body.appendChild(modal);
 
                 const carreraSelect = doc.getElementById("horario-modal-carrera");
                 if (carreraSelect && carreraSelect.dataset.version !== horarioUiVersion) {
@@ -912,29 +924,42 @@ def mostrar_horario_general():
                         if (!cell || !body.contains(cell)) return;
 
                         event.preventDefault();
-                        menu.currentCell = cell;
-
-                        const menuWidth = 160;
-                        const menuHeight = 44;
-                        const left = Math.min(event.clientX, doc.documentElement.clientWidth - menuWidth - 8);
-                        const top = Math.min(event.clientY, doc.documentElement.clientHeight - menuHeight - 8);
-                        menu.style.left = Math.max(8, left) + "px";
-                        menu.style.top = Math.max(8, top) + "px";
-                        menu.style.display = "block";
+                        event.stopPropagation();
+                        const rect = cell.getBoundingClientRect();
+                        const x = event.clientX || (rect.left + 12);
+                        const y = event.clientY || (rect.top + 12);
+                        showMenu(cell, x, y);
                     });
 
-                    menu.querySelector("button").addEventListener("click", function () {
+                    body.addEventListener("keydown", function (event) {
+                        const cell = event.target.closest(".horario-editable-cell");
+                        if (!cell || (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))) return;
+                        event.preventDefault();
+                        const rect = cell.getBoundingClientRect();
+                        showMenu(cell, rect.left + 12, rect.top + 12);
+                    });
+
+                    menu.querySelector('[data-menu-action="editar"]').addEventListener("click", function () {
                         if (menu.currentCell) {
                             openEditModalFromCell(menu.currentCell);
                         }
-                        hideMenu();
+                        hideMenu(false);
                     });
 
-                    doc.addEventListener("click", hideMenu);
-                    doc.addEventListener("keydown", function (event) {
-                        if (event.key === "Escape") hideMenu();
-                    });
-                    body.addEventListener("scroll", hideMenu, { passive: true });
+                    function onDocumentClick() {
+                        hideMenu(false);
+                    }
+                    function onDocumentKeydown(event) {
+                        if (event.key === "Escape") hideMenu(true);
+                    }
+                    doc.addEventListener("click", onDocumentClick);
+                    doc.addEventListener("keydown", onDocumentKeydown);
+                    body.addEventListener("scroll", function () { hideMenu(false); }, { passive: true });
+                    window.parent.__horarioContextCleanup = function () {
+                        doc.removeEventListener("click", onDocumentClick);
+                        doc.removeEventListener("keydown", onDocumentKeydown);
+                        window.parent.__horarioContextCleanup = null;
+                    };
                 }
             }
 
@@ -1227,7 +1252,7 @@ def mostrar_perfil_estudiante(codigo):
     if not df_pagadas.empty:
         with st.expander(f" Historial de multas pagadas ({len(df_pagadas)})", expanded=False):
             for _, m in df_pagadas.iterrows():
-                st.write(f"** {m['fecha_multa']}** → Pagado: {m['fecha_pago']}")
+                st.write(f"**{m['fecha_multa']}**. Pagado: {m['fecha_pago']}")
                 st.write(f" {m['motivo']}")
                 if m['sancion']:
                     st.write(f" Sanción: {m['sancion']}")

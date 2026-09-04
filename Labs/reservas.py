@@ -5,6 +5,68 @@ from utils import generar_multa
 from constants import LABORATORIOS, LABS_NAMES
 import streamlit as st
 
+
+CLAVE_INTERCAMBIOS_RESERVAS = "intercambios_reservas_por_fecha"
+
+
+def obtener_intercambios_fecha(fecha):
+    """Devuelve la permutación visual de celdas para una fecha de esta sesión."""
+    todos = st.session_state.get(CLAVE_INTERCAMBIOS_RESERVAS, {})
+    return dict(todos.get(str(fecha), {}))
+
+
+def coordenada_origen_visual(fecha, hora, laboratorio):
+    """Resuelve qué celda base debe mostrarse en una posición del calendario."""
+    clave = f"{hora}|{laboratorio}"
+    origen = obtener_intercambios_fecha(fecha).get(clave, clave)
+    return tuple(origen.split("|", 1))
+
+
+def intercambiar_espacios_sesion(fecha, hora_origen, lab_origen, hora_destino, lab_destino):
+    """Permuta dos posiciones solo en session_state; nunca escribe en SQLite."""
+    if not all((fecha, hora_origen, lab_origen, hora_destino, lab_destino)):
+        raise ValueError("Las dos celdas del intercambio son obligatorias.")
+    clave_origen = f"{hora_origen}|{lab_origen}"
+    clave_destino = f"{hora_destino}|{lab_destino}"
+    if clave_origen == clave_destino:
+        raise ValueError("Selecciona dos espacios diferentes.")
+    fecha = str(fecha)
+    todos = dict(st.session_state.get(CLAVE_INTERCAMBIOS_RESERVAS, {}))
+    mapa = dict(todos.get(fecha, {}))
+    contenido_origen = mapa.get(clave_origen, clave_origen)
+    contenido_destino = mapa.get(clave_destino, clave_destino)
+    mapa[clave_origen] = contenido_destino
+    mapa[clave_destino] = contenido_origen
+    todos[fecha] = mapa
+    # Reasignar el objeto completo garantiza que Streamlit conserve la mutación
+    # antes del rerun del diálogo.
+    st.session_state[CLAVE_INTERCAMBIOS_RESERVAS] = todos
+    st.session_state["intercambios_reservas_revision"] = (
+        int(st.session_state.get("intercambios_reservas_revision", 0)) + 1
+    )
+    return mapa
+
+
+def aplicar_intercambios_busqueda(df):
+    """Proyecta salones/horas temporales en resultados sin alterar sus registros."""
+    if df is None or df.empty or not {"fecha", "hora", "laboratorio"}.issubset(df.columns):
+        return df
+    resultado = df.copy()
+    mapas = st.session_state.get(CLAVE_INTERCAMBIOS_RESERVAS, {})
+    inversos = {
+        fecha: {origen: destino for destino, origen in mapa.items()}
+        for fecha, mapa in mapas.items()
+    }
+    for indice, fila in resultado.iterrows():
+        fecha = str(fila["fecha"])
+        origen = f"{fila['hora']}|{fila['laboratorio']}"
+        destino = inversos.get(fecha, {}).get(origen)
+        if destino:
+            hora, laboratorio = destino.split("|", 1)
+            resultado.at[indice, "hora"] = hora
+            resultado.at[indice, "laboratorio"] = laboratorio
+    return resultado
+
 # ============================================================
 #  FUNCIONES DE VERIFICACIÓN Y GUARDADO
 # ============================================================
@@ -232,20 +294,32 @@ def buscar_reservas_persona(termino):
     """
     Busca reservas de una persona por su código (parcial).
     """
-    return db.fetch_df("""SELECT id, fecha, hora, laboratorio, banco, codigo, nombres, proyecto, asiste, observaciones, tecnico
-                       FROM reservas WHERE codigo LIKE ? AND activo=1 ORDER BY fecha DESC, hora ASC""",
+    df = db.fetch_df("""SELECT
+                            r.id, r.fecha, r.hora, r.laboratorio, r.banco,
+                            r.codigo, r.nombres, r.proyecto, r.asiste,
+                            r.observaciones, r.tecnico,
+                            (SELECT COUNT(*)
+                               FROM multas m
+                              WHERE trim(m.codigo_estudiante) = trim(r.codigo)
+                                AND upper(trim(coalesce(m.pagado, 'NO'))) = 'NO'
+                            ) AS multas_activas
+                       FROM reservas r
+                       WHERE r.codigo LIKE ? AND r.activo=1
+                       ORDER BY r.fecha DESC, r.hora ASC""",
                     (f'%{termino}%',))
+    return aplicar_intercambios_busqueda(df)
 
 def get_reporte_completo(fecha_desde, fecha_hasta):
     """
     Obtiene un reporte completo de reservas en un rango de fechas.
     """
-    return db.fetch_df("""
+    df = db.fetch_df("""
         SELECT fecha, hora, laboratorio, banco, codigo, nombres, proyecto, observaciones, tecnico,
                CASE WHEN asiste='Si' THEN 'Asistio' WHEN asiste='No' THEN 'No asistio' ELSE 'Pendiente' END as estado
         FROM reservas WHERE fecha BETWEEN ? AND ? AND activo=1
         ORDER BY laboratorio, fecha, hora
     """, (fecha_desde, fecha_hasta))
+    return aplicar_intercambios_busqueda(df)
 
 def get_reporte_docentes(fecha_desde, fecha_hasta):
     """

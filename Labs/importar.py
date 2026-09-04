@@ -282,7 +282,7 @@ def importar_horario():
     
     print("\n Laboratorios encontrados en el Excel:")
     for lab, mapeado in sorted(set(labs_encontrados), key=lambda x: x[1]):
-        print(f"   - {lab} → {mapeado}")
+        print(f"   - {lab}: {mapeado}")
 
     # 3. Conectar a la BD
     with sqlite3.connect(DB_PATH) as conn:
@@ -341,7 +341,7 @@ def importar_horario():
     print("=" * 60)
     print(f" Eliminados: {eliminados} (solo laboratorios del Excel)")
     print(f" Insertados: {insertados}")
-    print(f"⏭ Ignorados (duplicados): {ignorados}")
+    print(f"Ignorados (duplicados): {ignorados}")
     print(f" Errores: {errores}")
     print("\n Los espacios 'Adicional' NO se eliminan")
     print("\n ¡Listo!")

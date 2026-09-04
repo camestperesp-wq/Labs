@@ -206,7 +206,7 @@ def mostrar_panel_asistencias_pendientes():
                 registros_pagina = registros.iloc[inicio:inicio + 5]
 
                 anchos = [0.45, 0.9, 1, 2, 2, 0.9, 0.9] if modo_multiple else [0.9, 1, 2, 2, 0.9, 0.9]
-                titulos = ("✓", "Hora", "Laboratorio", "Persona", "Tipo / Asignatura", "", "") if modo_multiple else ("Hora", "Laboratorio", "Persona", "Tipo / Asignatura", "", "")
+                titulos = ("Seleccionar", "Hora", "Laboratorio", "Persona", "Tipo / Asignatura", "", "") if modo_multiple else ("Hora", "Laboratorio", "Persona", "Tipo / Asignatura", "", "")
                 encabezado = st.columns(anchos)
                 for columna, texto in zip(encabezado, titulos):
                     columna.markdown(f"**{texto}**")

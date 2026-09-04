@@ -202,6 +202,92 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_multas_fecha ON multas(fecha_multa)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_horario_dia_hora_lab ON horario_fijo(dia_semana, hora, laboratorio)")
 
+        # Inventario y préstamos de equipos de pasillo. La cabecera conserva los
+        # datos de salida/entrada y la tabla puente permite varios equipos por
+        # una misma transacción.
+        c.execute("""CREATE TABLE IF NOT EXISTS equipos_pasillo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            placa TEXT UNIQUE,
+            nombre TEXT NOT NULL,
+            numero_interno TEXT NOT NULL UNIQUE,
+            activo INTEGER NOT NULL DEFAULT 1 CHECK(activo IN (0, 1)),
+            creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""")
+        columnas_equipos = {fila[1]: fila for fila in c.execute("PRAGMA table_info(equipos_pasillo)")}
+        if columnas_equipos.get("placa", (None, None, None, 0))[3]:
+            # Migración de instalaciones que crearon placa como NOT NULL.
+            # SQLite requiere reconstruir la tabla para retirar la restricción.
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys = OFF")
+            try:
+                conn.execute("BEGIN")
+                conn.execute("""CREATE TABLE equipos_pasillo_nueva (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    placa TEXT UNIQUE,
+                    nombre TEXT NOT NULL,
+                    numero_interno TEXT NOT NULL UNIQUE,
+                    activo INTEGER NOT NULL DEFAULT 1 CHECK(activo IN (0, 1)),
+                    creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )""")
+                conn.execute("""INSERT INTO equipos_pasillo_nueva
+                    (id, placa, nombre, numero_interno, activo, creado_en)
+                    SELECT id, NULLIF(trim(placa), ''), nombre, numero_interno, activo, creado_en
+                    FROM equipos_pasillo""")
+                conn.execute("DROP TABLE equipos_pasillo")
+                conn.execute("ALTER TABLE equipos_pasillo_nueva RENAME TO equipos_pasillo")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.execute("PRAGMA foreign_keys = ON")
+        c.execute("""CREATE TABLE IF NOT EXISTS prestamos_pasillo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            solicitante TEXT NOT NULL,
+            tecnico_entrega TEXT NOT NULL,
+            fecha_salida TEXT NOT NULL,
+            observaciones_salida TEXT,
+            receptor TEXT,
+            fecha_retorno TEXT,
+            observaciones_entrada TEXT,
+            estado TEXT NOT NULL DEFAULT 'PRESTADO'
+                CHECK(estado IN ('PRESTADO', 'DEVUELTO'))
+        )""")
+        columnas_prestamos = {fila[1] for fila in c.execute("PRAGMA table_info(prestamos_pasillo)")}
+        for columna, definicion in {
+            "limite_fpga": "TEXT",
+            "ultima_renovacion": "TEXT",
+        }.items():
+            if columna not in columnas_prestamos:
+                c.execute(f"ALTER TABLE prestamos_pasillo ADD COLUMN {columna} {definicion}")
+        c.execute("""CREATE TABLE IF NOT EXISTS prestamos_pasillo_equipos (
+            prestamo_id INTEGER NOT NULL,
+            equipo_id INTEGER NOT NULL,
+            PRIMARY KEY (prestamo_id, equipo_id),
+            FOREIGN KEY (prestamo_id) REFERENCES prestamos_pasillo(id) ON DELETE CASCADE,
+            FOREIGN KEY (equipo_id) REFERENCES equipos_pasillo(id)
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS multas_prestamos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prestamo_id INTEGER NOT NULL,
+            codigo_estudiante TEXT NOT NULL,
+            tipo TEXT NOT NULL CHECK(tipo IN ('FPGA_RETRASO', 'DEVOLUCION_DIA_SIGUIENTE')),
+            motivo TEXT NOT NULL,
+            fecha_incidente TEXT NOT NULL,
+            fecha_limite_referencia TEXT NOT NULL,
+            retraso_minutos INTEGER NOT NULL DEFAULT 0,
+            monto_pago REAL NOT NULL DEFAULT 0,
+            tecnico_responsable TEXT,
+            estado TEXT NOT NULL DEFAULT 'PENDIENTE' CHECK(estado IN ('PENDIENTE', 'PAGADA')),
+            fecha_pago TEXT,
+            UNIQUE(prestamo_id, tipo, fecha_limite_referencia),
+            FOREIGN KEY (prestamo_id) REFERENCES prestamos_pasillo(id)
+        )""")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_prestamos_pasillo_estado ON prestamos_pasillo(estado, fecha_salida)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_prestamos_pasillo_equipo ON prestamos_pasillo_equipos(equipo_id, prestamo_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_multas_prestamos_codigo_estado ON multas_prestamos(codigo_estudiante, estado)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_multas_prestamos_prestamo ON multas_prestamos(prestamo_id)")
+
         limpiar_bloques_impares_duplicados(conn)
 
         # Actualiza estadísticas para que SQLite elija el mejor índice.

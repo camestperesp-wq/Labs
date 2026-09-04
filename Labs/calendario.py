@@ -8,6 +8,7 @@ import horario_fijo as hf
 import estudiantes as est
 import database as db
 import multas
+import prestamos_pasillos as prestamos_pasillos_data
 from ui_components import render_editor_asistencias
 
 # ==================== FUNCIONES DE OCUPACIÃ“N ====================
@@ -181,7 +182,6 @@ def mostrar_calendario_interactivo(dia_seleccionado):
     fecha_str = fecha.strftime("%Y-%m-%d")
     es_pasado = fecha < hoy
     contexto_calendario = _build_contexto_calendario(dia_seleccionado, fecha_str)
-    
     # Cabecera: horas + laboratorios
     cols = st.columns([1] + [1] * len(LABS_ORDEN))
     with cols[0]:
@@ -1284,8 +1284,8 @@ def _inyectar_estilo_boton_celda(marker_id, estilo):
         <style id="{marker_id}">
             div[data-testid="stElementContainer"]:has(style#{marker_id}) + div[data-testid="stElementContainer"] button {{
                 background: {estilo["background"]} !important;
-                height: 220px !important;
-                min-height: 220px !important;
+                height: 160px !important;
+                min-height: 160px !important;
                 border: 2px solid {estilo["border"]} !important;
                 border-radius: 4px !important;
                 padding: 0.55rem !important;
@@ -1332,11 +1332,15 @@ def _inyectar_estilo_boton_celda(marker_id, estilo):
     )
 
 
+@st.fragment
 def mostrar_calendario_interactivo(dia_seleccionado):
     """
     Grilla de reserva con botones nativos para abrir el modal sin navegar.
     """
     st.subheader(f"Ocupación para {dia_seleccionado}")
+    mensaje_intercambio = st.session_state.pop("intercambio_reserva_flash", None)
+    if mensaje_intercambio:
+        st.success(mensaje_intercambio)
     hoy = datetime.now().date()
     lunes = st.session_state.labs_semana_inicio
     idx = DIAS.index(dia_seleccionado)
@@ -1344,6 +1348,68 @@ def mostrar_calendario_interactivo(dia_seleccionado):
     fecha_str = fecha.strftime("%Y-%m-%d")
     es_pasado = fecha < hoy
     contexto_calendario = _build_contexto_calendario(dia_seleccionado, fecha_str)
+    estados_base = {
+        (hora, lab): _obtener_estado_celda(
+            dia_seleccionado, lab, fecha_str, hora, contexto_calendario
+        )
+        for hora in HORAS for lab in LABS_ORDEN
+    }
+    mapa_intercambios = res.obtener_intercambios_fecha(fecha_str)
+
+    def estado_visual(hora, lab):
+        origen = mapa_intercambios.get(f"{hora}|{lab}", f"{hora}|{lab}")
+        hora_base, lab_base = origen.split("|", 1)
+        return estados_base.get((hora_base, lab_base), estados_base[(hora, lab)])
+
+    estados_visuales = {
+        (hora, lab): estado_visual(hora, lab)
+        for hora in HORAS for lab in LABS_ORDEN
+    }
+    ocupadas = {
+        (hora, lab): estado
+        for (hora, lab), estado in estados_visuales.items()
+        if estado.get("tiene_asignatura") or estado.get("reservas_activas")
+        or estado.get("tiene_profesor") or estado.get("ocupados", 0)
+    }
+
+    encabezado_col, intercambio_col = st.columns([5, 1.35], vertical_alignment="center")
+    encabezado_col.caption(
+        "Seleccione una celda para gestionar su reserva o use el intercambio temporal."
+    )
+    with intercambio_col:
+        with st.popover("Intercambiar espacio", use_container_width=True):
+            if len(ocupadas) < 2:
+                st.info("Se requieren al menos dos espacios ocupados.")
+            else:
+                etiquetas = {
+                    clave: (
+                        f"{clave[0]} · {LABS_NAMES.get(clave[1], clave[1])} · "
+                        f"{estado['detalle']}"
+                    )
+                    for clave, estado in ocupadas.items()
+                }
+                origen = st.selectbox(
+                    "Espacio de origen", list(etiquetas),
+                    format_func=lambda clave: etiquetas[clave],
+                    key=f"intercambio_origen_{fecha_str}",
+                )
+                destinos = [clave for clave in etiquetas if clave != origen]
+                destino = st.selectbox(
+                    "Espacio de destino", destinos,
+                    format_func=lambda clave: etiquetas[clave],
+                    key=f"intercambio_destino_{fecha_str}",
+                )
+                if st.button(
+                    "Confirmar intercambio", key=f"confirmar_intercambio_{fecha_str}",
+                    use_container_width=True,
+                ):
+                    res.intercambiar_espacios_sesion(
+                        fecha_str, origen[0], origen[1], destino[0], destino[1]
+                    )
+                    st.session_state.intercambio_reserva_flash = (
+                        "Espacios intercambiados para el día seleccionado."
+                    )
+                    st.rerun(scope="fragment")
 
     st.markdown(
         """
@@ -1363,7 +1429,7 @@ def mostrar_calendario_interactivo(dia_seleccionado):
                 overflow: hidden;
             }
             .reserva-native-time {
-                height: 220px;
+                height: 160px;
                 border: 1px solid #ddd;
                 background: #f9f9f9;
                 display: flex;
@@ -1429,7 +1495,7 @@ def mostrar_calendario_interactivo(dia_seleccionado):
             st.markdown(f"<div class='reserva-native-time'>{hora}</div>", unsafe_allow_html=True)
 
         for i, lab in enumerate(LABS_ORDEN, start=1):
-            estado = _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto_calendario)
+            estado = estados_visuales[(hora, lab)]
             key = f"reserva_celda_{fecha_str}_{hora}_{lab}"
             estilo = _estilo_celda_reserva({"estado": "pasado"} if es_pasado else estado)
             with cols[i]:
@@ -1448,6 +1514,154 @@ def mostrar_calendario_interactivo(dia_seleccionado):
                     use_container_width=True,
                 ):
                     _seleccionar_celda_reserva(lab, fecha_str, hora, estado)
+
+    # El intercambio se resuelve dentro del fragmento mediante el popover
+    # superior. No se inyectan listeners globales ni navegación por URL.
+    return
+
+    @st.dialog("Intercambiar espacio")
+    def mostrar_intercambio_reserva():
+        origen = st.session_state.get("intercambio_reserva_origen")
+        if not origen or origen.get("fecha") != fecha_str:
+            st.info("La celda seleccionada no pertenece al día visible.")
+            return
+        candidatos = {}
+        for hora_candidata in HORAS:
+            for lab_candidato in LABS_ORDEN:
+                if (hora_candidata, lab_candidato) == (origen["hora"], origen["laboratorio"]):
+                    continue
+                estado = estado_visual(hora_candidata, lab_candidato)
+                ocupado = bool(
+                    estado.get("tiene_asignatura") or estado.get("reservas_activas")
+                    or estado.get("tiene_profesor") or estado.get("ocupados", 0)
+                )
+                if ocupado:
+                    clave = f"{hora_candidata}|{lab_candidato}"
+                    candidatos[clave] = (
+                        f"{hora_candidata} · {LABS_NAMES.get(lab_candidato, lab_candidato)} · "
+                        f"{estado['detalle']}"
+                    )
+        st.caption(f"Cambio temporal únicamente para {formatear_fecha_espanol(fecha_str)}.")
+        if not candidatos:
+            st.info("No hay otra reserva o clase ocupada disponible ese día.")
+            return
+        destino = st.selectbox(
+            "Reserva o clase de destino", list(candidatos),
+            format_func=lambda clave: candidatos[clave], key="intercambio_reserva_destino",
+        )
+        aceptar, cancelar = st.columns(2)
+        if aceptar.button("Intercambiar", use_container_width=True):
+            hora_destino, lab_destino = destino.split("|", 1)
+            res.intercambiar_espacios_sesion(
+                fecha_str, origen["hora"], origen["laboratorio"],
+                hora_destino, lab_destino,
+            )
+            st.session_state.intercambio_reserva_flash = "Espacios intercambiados para el día seleccionado."
+            st.session_state.intercambio_reserva_origen = None
+            st.rerun()
+        if cancelar.button("Cancelar", use_container_width=True):
+            st.session_state.intercambio_reserva_origen = None
+            st.rerun()
+
+    if st.session_state.get("intercambio_reserva_origen"):
+        mostrar_intercambio_reserva()
+
+    celdas_js = [
+        {
+            "marker": _id_css_celda_reserva(f"reserva_celda_{fecha_str}_{hora}_{lab}"),
+            "fecha": fecha_str, "hora": hora, "lab": lab,
+            "ocupada": bool(
+                estado_visual(hora, lab).get("tiene_asignatura")
+                or estado_visual(hora, lab).get("reservas_activas")
+                or estado_visual(hora, lab).get("tiene_profesor")
+                or estado_visual(hora, lab).get("ocupados", 0)
+            ),
+        }
+        for hora in HORAS for lab in LABS_ORDEN
+    ]
+    version_js = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    st.components.v1.html(
+        f"""
+        <script>
+        (() => {{
+          const host = window.parent;
+          const doc = host.document;
+          const cells = {json.dumps(celdas_js, ensure_ascii=False)};
+          const version = {json.dumps(version_js)};
+
+          if (host.__reservasContextCleanup) host.__reservasContextCleanup();
+          doc.getElementById("reservas-context-menu")?.remove();
+
+          const menu = doc.createElement("div");
+          menu.id = "reservas-context-menu";
+          menu.dataset.version = version;
+          menu.setAttribute("role", "menu");
+          menu.innerHTML = "<a href='#' target='_parent' role='menuitem'>Intercambiar espacio</a>";
+          Object.assign(menu.style, {{position:"fixed", display:"none", zIndex:"1000000", minWidth:"190px", padding:"5px", background:"#fff", border:"1px solid #d8dee8", borderRadius:"9px", boxShadow:"0 14px 34px rgba(23,32,42,.22)"}});
+          const item = menu.querySelector("a");
+          Object.assign(item.style, {{display:"block", width:"100%", boxSizing:"border-box", border:"0", borderRadius:"6px", padding:"9px 11px", background:"#fff", color:"#731116", fontWeight:"750", textAlign:"left", cursor:"pointer", textDecoration:"none"}});
+          doc.body.appendChild(menu);
+
+          function tagCells() {{
+            cells.forEach(cell => {{
+              const marker = doc.getElementById(cell.marker);
+              const container = marker?.closest('[data-testid="stElementContainer"]');
+              const buttonContainer = container?.nextElementSibling;
+              const button = buttonContainer?.querySelector("button");
+              if (!button) return;
+              button.dataset.reservaContext = "true";
+              button.dataset.fecha = cell.fecha;
+              button.dataset.hora = cell.hora;
+              button.dataset.lab = cell.lab;
+              button.dataset.ocupada = cell.ocupada ? "true" : "false";
+            }});
+          }}
+
+          function hide() {{ menu.style.display = "none"; }}
+          function contextHandler(event) {{
+            const button = event.target.closest('button[data-reserva-context="true"]');
+            if (!button || button.dataset.ocupada !== "true") return;
+            event.preventDefault();
+            event.stopPropagation();
+            menu.currentButton = button;
+            const url = new URL(host.location.href);
+            url.searchParams.set("accion_reserva", "intercambiar");
+            ["fecha", "hora", "lab"].forEach(key => url.searchParams.set(key, button.dataset[key]));
+            url.searchParams.set("_", Date.now().toString());
+            item.href = url.toString();
+            menu.style.left = `${{event.clientX}}px`;
+            menu.style.top = `${{event.clientY}}px`;
+            menu.style.display = "block";
+            const rect = menu.getBoundingClientRect();
+            if (rect.right > doc.documentElement.clientWidth - 8) menu.style.left = `${{Math.max(8, event.clientX - rect.width)}}px`;
+            if (rect.bottom > doc.documentElement.clientHeight - 8) menu.style.top = `${{Math.max(8, event.clientY - rect.height)}}px`;
+          }}
+          function clickAway(event) {{ if (!menu.contains(event.target)) hide(); }}
+          function escapeHandler(event) {{ if (event.key === "Escape") hide(); }}
+          item.addEventListener("click", () => hide());
+
+          doc.addEventListener("contextmenu", contextHandler, true);
+          doc.addEventListener("pointerdown", clickAway, true);
+          doc.addEventListener("keydown", escapeHandler, true);
+          const observer = new MutationObserver(tagCells);
+          observer.observe(doc.body, {{childList:true, subtree:true}});
+          tagCells();
+          host.setTimeout(tagCells, 80);
+          host.setTimeout(tagCells, 300);
+          host.__reservasContextCleanup = () => {{
+            observer.disconnect();
+            doc.removeEventListener("contextmenu", contextHandler, true);
+            doc.removeEventListener("pointerdown", clickAway, true);
+            doc.removeEventListener("keydown", escapeHandler, true);
+            menu.remove();
+            host.__reservasContextCleanup = null;
+          }};
+        }})();
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
 
 
 def _render_formulario_reserva_individual(data, puede_reservar_individual):
@@ -1477,6 +1691,7 @@ def _render_formulario_reserva_individual(data, puede_reservar_individual):
     estudiante_info = None
     reservas_fecha = 0
     multas_activas = 0
+    alertas_prestamos = []
     autorizacion_key = f"autoriza_multas_{lab}_{fecha_str}_{hora}_{codigo}"
     if codigo:
         estudiante_info = est.buscar_estudiante(codigo)
@@ -1495,16 +1710,21 @@ def _render_formulario_reserva_individual(data, puede_reservar_individual):
                 st.info(estudiante_info[2])
             multas_activas = multas.contar_multas_activas(codigo)
             multas_texto = multas.obtener_texto_multas_activas(codigo)
+            alertas_prestamos = prestamos_pasillos_data.obtener_alertas_bloqueo(codigo)
             if multas_texto:
                 st.error(f"Multas activas:\n{multas_texto}")
+            for alerta in alertas_prestamos:
+                st.error(f"ALERTA CRÍTICA: {alerta}")
         else:
             st.error("Código no válido. Verifica el código ingresado.")
 
-    requiere_autorizacion = bool(estudiante_info and multas_activas > 3)
+    requiere_autorizacion = bool(
+        estudiante_info and (multas_activas > 0 or alertas_prestamos)
+    )
     if requiere_autorizacion:
         st.error(
-            f"ALERTA CRÍTICA: el estudiante registra {multas_activas} multas activas. "
-            "El préstamo está bloqueado hasta que un técnico tome una decisión."
+            "ALERTA CRÍTICA: la reserva está bloqueada por incumplimientos pendientes. "
+            "Un técnico responsable debe autorizarla expresamente."
         )
         autorizar_col, negar_col = st.columns(2)
         with autorizar_col:
@@ -1767,16 +1987,16 @@ def _render_detalle_celda_contenido():
     if tiene_docente_en_clase and not asistencia_docente_registrada:
         acciones.append("Asistencia docente")
     if puede_reservar_individual:
-        acciones.append("Reserva individual")
-    if not es_asignatura and not es_profesor_asistio and df.empty:
-        acciones.append("Reserva docente")
+        acciones.append("Reserva Individual")
+    if (not es_asignatura or es_adicional) and not es_profesor_asistio and df.empty:
+        acciones.append("Reserva Docente")
 
     if acciones:
         st.divider()
         accion = _seleccionar_accion_modal(acciones, f"accion_modal_{lab}_{fecha_str}_{hora}")
-        if accion == "Reserva individual":
+        if accion == "Reserva Individual":
             _render_formulario_reserva_individual(data, puede_reservar_individual)
-        elif accion == "Reserva docente":
+        elif accion == "Reserva Docente":
             _render_formulario_reserva_docente(data, profesor_data)
         elif accion == "Asistencia docente":
             _render_formulario_asistencia_docente_modal(data, asignatura_info, profesor_data)

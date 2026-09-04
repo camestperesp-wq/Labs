@@ -3,8 +3,10 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-from constants import LABORATORIOS, HORAS
+from urllib.parse import urlencode
+from constants import LABORATORIOS, HORAS, LABS_NAMES
 import reservas as res
+import prestamos_pasillos as prestamos_pasillos_data
 from ui_components import render_editor_asistencias
 from exportaciones import crear_excel_institucional as _crear_excel_institucional
 
@@ -68,9 +70,14 @@ def mostrar_consulta_fecha_lab():
 
 def mostrar_busqueda_codigo():
     st.subheader("Buscar por código")
-    termino = st.text_input("Código", key="labs_termino_persona")
+    with st.form("form_buscar_codigo", border=False):
+        buscar_col, boton_col = st.columns([5, 1], vertical_alignment="bottom")
+        with buscar_col:
+            termino = st.text_input("Código", key="labs_termino_persona")
+        with boton_col:
+            buscar = st.form_submit_button("Buscar", use_container_width=True)
 
-    if st.button("Buscar", key="labs_buscar_codigo"):
+    if buscar:
         if termino and len(termino) >= 3:
             st.session_state.labs_codigo_busqueda = termino
             st.session_state.pagina_labs_persona = 1
@@ -80,13 +87,144 @@ def mostrar_busqueda_codigo():
 
     if "labs_codigo_busqueda" in st.session_state:
         termino = st.session_state.labs_codigo_busqueda
+        prestamos_activos = prestamos_pasillos_data.obtener_prestamos_activos_codigo(termino)
         df_persona = res.buscar_reservas_persona(termino)
-        
-        if df_persona.empty:
-            st.info("Sin reservas.")
+        solicitante = prestamos_pasillos_data.obtener_solicitante(termino)
+        nombre = (
+            str(df_persona.iloc[0]["nombres"])
+            if not df_persona.empty else
+            str(prestamos_activos.iloc[0]["solicitante_nombre"])
+            if not prestamos_activos.empty else
+            str(solicitante["nombres"])
+            if solicitante else ""
+        )
+
+        if nombre:
+            st.success(f"Usuario verificado: {nombre}")
+        elif df_persona.empty and prestamos_activos.empty:
+            st.info("No se encontraron datos para el código consultado.")
+            return
+
+        st.subheader("Informacion del Usuario / Reserva Basica")
+        proyecto = ""
+        if not df_persona.empty:
+            proyecto = str(df_persona.iloc[0].get("proyecto") or "")
+        elif solicitante:
+            proyecto = str(solicitante.get("proyecto") or "")
+        st.dataframe(
+            pd.DataFrame([{"Código": termino, "Nombre": nombre or "No registrado", "Proyecto": proyecto}]),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.subheader("Multas activas")
+        multas_activas = (
+            int(pd.to_numeric(df_persona["multas_activas"], errors="coerce").fillna(0).max())
+            if not df_persona.empty else 0
+        )
+        if multas_activas:
+            st.warning(f"El usuario tiene {multas_activas} multa(s) activa(s).")
+            destino_deudores = "?" + urlencode({
+                "modulo": "deudores", "codigo_deudor": termino,
+            })
+            st.markdown(
+                f'<a href="{destino_deudores}" target="_self">Ver detalle en Deudores</a>',
+                unsafe_allow_html=True,
+            )
         else:
-            st.success(f"{len(df_persona)} reservas encontradas")
-            _render_editor_paginado(df_persona, "labs_persona")
+            st.caption("Sin multas activas registradas.")
+
+        resumen = pd.DataFrame()
+        if not df_persona.empty:
+            # Una fila por persona: la próxima reserva desde hoy o, si no hay
+            # próximas, la reserva más reciente. No se presenta el historial.
+            reservas = df_persona.copy()
+            reservas["_fecha"] = pd.to_datetime(reservas["fecha"], errors="coerce")
+            hoy = pd.Timestamp(datetime.now().date())
+            filas_actuales = []
+            for _, reservas_persona in reservas.groupby("codigo", sort=False):
+                proximas = reservas_persona[reservas_persona["_fecha"] >= hoy]
+                indice = (
+                    proximas["_fecha"].idxmin()
+                    if not proximas.empty
+                    else reservas_persona["_fecha"].idxmax()
+                )
+                filas_actuales.append(reservas.loc[indice])
+
+            resumen = pd.DataFrame(filas_actuales)
+            resumen["laboratorio"] = resumen["laboratorio"].map(
+                lambda salon: LABS_NAMES.get(salon, salon)
+            )
+            resumen["fecha"] = resumen["_fecha"].dt.strftime("%d/%m/%Y").fillna(resumen["fecha"])
+            resumen["multas_activas"] = resumen["multas_activas"].fillna(0).astype(int)
+            resumen["Asistencia"] = resumen["asiste"].map({
+                "Si": "Asistió",
+                "No": "No asistió",
+            }).fillna("Pendiente")
+            resumen = resumen.rename(columns={
+                "codigo": "Código",
+                "nombres": "Nombre",
+                "proyecto": "Proyecto",
+                "fecha": "Fecha",
+                "laboratorio": "Salón",
+                "hora": "Hora",
+            })
+
+            st.subheader("Horario y Detalles de la Clase")
+            st.dataframe(
+                resumen[["Salón", "Fecha", "Hora", "Asistencia"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.caption("Gestión de asistencia de la reserva mostrada")
+            for _, persona in resumen.iterrows():
+                estado = persona["Asistencia"]
+                with st.container(border=True):
+                    etiqueta, asistio_col, no_asistio_col = st.columns([3, 1, 1], vertical_alignment="center")
+                    etiqueta.markdown(
+                        f"**{persona['Nombre']}** · Estado actual: **{estado}**"
+                    )
+                    asistio_col.button(
+                        "Asistió",
+                        key=f"busqueda_asistio_{int(persona['id'])}",
+                        disabled=estado == "Asistió",
+                        use_container_width=True,
+                        on_click=res.actualizar_asiste,
+                        args=(int(persona["id"]), "Si", None),
+                    )
+                    no_asistio_col.button(
+                        "No asistió",
+                        key=f"busqueda_no_asistio_{int(persona['id'])}",
+                        disabled=estado == "No asistió",
+                        use_container_width=True,
+                        on_click=res.actualizar_asiste,
+                        args=(int(persona["id"]), "No", None),
+                    )
+        else:
+            st.subheader("Horario y Detalles de la Clase")
+            st.info("El usuario no tiene una reserva vigente o seleccionable.")
+
+        st.subheader("Prestamos Activos Vigentes")
+        if prestamos_activos.empty:
+            st.info("El usuario no tiene préstamos activos.")
+        else:
+            for _, prestamo in prestamos_activos.iterrows():
+                with st.container(border=True):
+                    detalle_col, accion_col = st.columns([5, 1.6], vertical_alignment="center")
+                    detalle_col.markdown(
+                        f"**{prestamo['equipos']}**  \nSalida: {prestamo['fecha_salida']}"
+                    )
+                    destino = "?" + urlencode({
+                        "modulo": "prestamos_pasillos",
+                        "prestamo_id": int(prestamo["id"]),
+                        "codigo_prestamo": str(prestamo["solicitante"]),
+                    })
+                    accion_col.markdown(
+                        f'<a class="labs-action-link" href="{destino}" target="_self">'
+                        "Gestionar devolución</a>",
+                        unsafe_allow_html=True,
+                    )
 
 def mostrar_reporte_completo():
     st.subheader("Reporte completo de reservas")

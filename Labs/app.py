@@ -8,6 +8,7 @@ import calendario as cal
 import database as db
 import estudiantes as est
 import reportes as rep
+from prestamos_pasillos_ui import mostrar_prestamos_pasillos
 import utils
 from asistencias_pendientes import mostrar_panel_asistencias_pendientes
 from constants import (
@@ -458,10 +459,10 @@ st.markdown("""
 
         .block-container {
             max-width: 1500px;
-            padding-top: 1.1rem !important;
+            padding-top: 0.35rem !important;
             padding-left: 2.35rem !important;
             padding-right: 2.35rem !important;
-            padding-bottom: 3rem !important;
+            padding-bottom: 1rem !important;
         }
 
         html, body, .stApp, .stMarkdown, .stText, label {
@@ -497,7 +498,7 @@ st.markdown("""
 
         .labs-hero {
             margin: 0 calc(50% - 50vw) 0 calc(50% - 50vw) !important;
-            padding: 1.25rem max(2.35rem, calc((100vw - 1500px) / 2 + 2.35rem)) 1rem max(2.35rem, calc((100vw - 1500px) / 2 + 2.35rem)) !important;
+            padding: 0.55rem max(2.35rem, calc((100vw - 1500px) / 2 + 2.35rem)) 0.5rem max(2.35rem, calc((100vw - 1500px) / 2 + 2.35rem)) !important;
             border-radius: 0 !important;
             border: 0 !important;
             border-top: 0 !important;
@@ -520,12 +521,12 @@ st.markdown("""
 
         .labs-hero-main {
             color: var(--labs-ink) !important;
-            gap: 1.25rem !important;
+            gap: 0.75rem !important;
         }
 
         .labs-seal {
-            width: 108px !important;
-            height: 108px !important;
+            width: 62px !important;
+            height: 62px !important;
             border-radius: 0 !important;
             background: #ffffff !important;
             border: 0 !important;
@@ -555,7 +556,7 @@ st.markdown("""
             margin: 0.2rem 0 0.22rem 0 !important;
             color: #101820 !important;
             font-family: Georgia, Cambria, "Times New Roman", serif !important;
-            font-size: clamp(2.15rem, 2.55vw, 3.25rem) !important;
+            font-size: clamp(1.5rem, 2vw, 2.15rem) !important;
             font-weight: 800 !important;
             line-height: 1.02 !important;
             text-shadow: none !important;
@@ -564,8 +565,9 @@ st.markdown("""
 
         .labs-hero p {
             color: var(--labs-muted) !important;
-            font-size: 1.02rem !important;
-            line-height: 1.5 !important;
+            font-size: 0.88rem !important;
+            line-height: 1.25 !important;
+            margin: 0.12rem 0 !important;
             font-weight: 500 !important;
             text-shadow: none !important;
         }
@@ -583,7 +585,7 @@ st.markdown("""
             min-width: 112px;
             border: 1px solid var(--labs-line);
             border-radius: 8px;
-            padding: 0.62rem 0.78rem;
+            padding: 0.4rem 0.6rem;
             background: #f8fafc;
             text-align: left;
         }
@@ -828,10 +830,10 @@ st.markdown("""
         div[data-testid="stTabs"] div[role="tablist"],
         .stTabs div[role="tablist"] {
             position: relative !important;
-            margin: -1.65rem calc(50% - 50vw) 0 calc(50% - 50vw) !important;
+            margin: -0.55rem calc(50% - 50vw) 0 calc(50% - 50vw) !important;
             padding: 0 max(2.35rem, calc((100vw - 1500px) / 2 + 2.35rem)) !important;
             gap: 0 !important;
-            min-height: 64px !important;
+            min-height: 48px !important;
             background: #941419 !important;
             border: 0 !important;
             border-radius: 0 !important;
@@ -846,8 +848,8 @@ st.markdown("""
             align-items: center !important;
             justify-content: center !important;
             flex: 0 0 auto !important;
-            min-height: 64px !important;
-            padding: 0.9rem 1.25rem 0.9rem 1.62rem !important;
+            min-height: 48px !important;
+            padding: 0.5rem 1rem 0.5rem 1.35rem !important;
             border: 0 !important;
             border-radius: 0 !important;
             background: transparent !important;
@@ -1098,17 +1100,82 @@ reservas_actualizadas = utils.actualizar_reservas_vencidas()
 if reservas_actualizadas:
     st.toast(f"{reservas_actualizadas} reservas vencidas marcadas como 'No asistió'")
 
+mostrar_panel_asistencias_pendientes()
+
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "HORARIO GENERAL",
     "RESERVAS",
+    "PRÉSTAMOS PASILLOS",
     "DEUDORES",
     "BUSCAR CÓDIGO",
-    "REPORTES",
     "CARGAR DATOS",
 ])
 
+# Permite que otros módulos abran directamente Deudores con el estudiante
+# seleccionado. st.tabs no ofrece una API de selección programática, por lo que
+# activamos la pestaña accesible por su etiqueta después de que Streamlit la crea.
+if st.query_params.get("modulo") == "prestamos_pasillos":
+    prestamo_destacado = st.query_params.get("prestamo_id", "")
+    codigo_destacado = st.query_params.get("codigo_prestamo", "")
+    if isinstance(prestamo_destacado, list):
+        prestamo_destacado = prestamo_destacado[0] if prestamo_destacado else ""
+    if isinstance(codigo_destacado, list):
+        codigo_destacado = codigo_destacado[0] if codigo_destacado else ""
+    st.session_state.pasillos_seccion = "Devoluciones"
+    st.session_state.pasillos_prestamo_destacado = str(prestamo_destacado).strip()
+    st.session_state.pasillos_codigo_destacado = str(codigo_destacado).strip()
+    for parametro in ("modulo", "prestamo_id", "codigo_prestamo"):
+        if parametro in st.query_params:
+            del st.query_params[parametro]
+    st.components.v1.html(
+        """
+        <script>
+        (function abrirPrestamos(intentos) {
+            const tabs = Array.from(window.parent.document.querySelectorAll('[role="tab"]'));
+            const tab = tabs.find(t => (t.textContent || '').trim().toUpperCase() === 'PRÉSTAMOS PASILLOS');
+            if (tab) return tab.click();
+            if (intentos < 20) window.setTimeout(() => abrirPrestamos(intentos + 1), 100);
+        })(0);
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
+
+if st.query_params.get("modulo") == "deudores":
+    codigo_deudor = st.query_params.get("codigo_deudor", "")
+    if isinstance(codigo_deudor, list):
+        codigo_deudor = codigo_deudor[0] if codigo_deudor else ""
+    if codigo_deudor:
+        st.session_state.deudor_search = str(codigo_deudor).strip()
+    # Limpiar también el estado de parámetros del servidor. Cambiar solo la URL
+    # desde JavaScript hacía que el código reapareciera en el siguiente rerender.
+    for parametro in ("modulo", "codigo_deudor"):
+        if parametro in st.query_params:
+            del st.query_params[parametro]
+    st.components.v1.html(
+        """
+        <script>
+        (function abrirDeudores(intentos) {
+            const doc = window.parent.document;
+            const tabs = Array.from(doc.querySelectorAll('[role="tab"]'));
+            const deudores = tabs.find(function (tab) {
+                return (tab.textContent || '').trim().toUpperCase() === 'DEUDORES';
+            });
+            if (deudores) {
+                deudores.click();
+                const url = new URL(window.parent.location.href);
+                return;
+            }
+            if (intentos < 20) window.setTimeout(function () { abrirDeudores(intentos + 1); }, 100);
+        })(0);
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
+
 with tab1:
-    mostrar_panel_asistencias_pendientes()
     mostrar_horario_general()
 
 with tab2:
@@ -1211,15 +1278,17 @@ with tab2:
     cal.mostrar_detalle_celda()
     cal.mostrar_formulario_reserva_profesor()
     cal.mostrar_formulario_asistencia_docente()
+    with st.expander("Reportes y descarga de reservas", expanded=False):
+        rep.mostrar_reporte_completo()
 
 with tab3:
-    mostrar_deudores()
+    mostrar_prestamos_pasillos()
 
 with tab4:
-    rep.mostrar_busqueda_codigo()
+    mostrar_deudores()
 
 with tab5:
-    rep.mostrar_reporte_completo()
+    rep.mostrar_busqueda_codigo()
 
 with tab6:
     st.subheader("Gestión de Estudiantes")
