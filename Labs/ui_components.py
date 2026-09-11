@@ -345,7 +345,7 @@ def mostrar_horario_general():
         """
         <div class="labs-section-title">
             <h2>Horario General de Laboratorios</h2>
-            <p>Los colores indican la carrera. Haz clic derecho sobre una celda para editarla.</p>
+            <p>Los colores indican la carrera. Haz clic derecho sobre el espacio que deseas modificar.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -370,7 +370,7 @@ def mostrar_horario_general():
         "Ing. Catastral": "#DDF5DC",
         "Posgrados": "#FFF0B8",
         "Adicional": "#E8C766",
-        "Práctica Libre": "#E7D8CC"
+        "Práctica Libre": "#BFE8E3"
     }
     idx_hoy = datetime.now().date().weekday()
     dia_hoy = DIAS[idx_hoy] if idx_hoy < len(DIAS) else DIAS[0]
@@ -494,6 +494,7 @@ def mostrar_horario_general():
                 border-radius: 999px;
             }
             .horario-editable-cell {
+                height: 145px;
                 cursor: context-menu;
                 transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
             }
@@ -550,15 +551,20 @@ def mostrar_horario_general():
                 carrera = celda.get("carrera", "")
                 color_fondo = colores_carrera.get(carrera, "#F0F0F0")
                 
-                texto = f"""
-                    <strong>{celda['asignatura']}</strong><br>
-                    {carrera}<br>
-                    <span style='font-size:0.7rem; color:#3f4650;'>
-                        Monitor: {celda['monitor']}<br>
-                        Prof: {celda['profesor']}
-                    </span>
-                """
-                
+                tipo = str(carrera or "").casefold()
+                es_practica = tipo in ("práctica libre", "practica libre")
+                es_prestamo = tipo in ("adicional", "préstamo docente", "prestamo docente")
+                nombres = []
+                if not es_practica:
+                    nombres.append("Docente: " + html_lib.escape(str(celda.get("profesor") or "Sin asignar")))
+                if not es_prestamo:
+                    nombres.append("Monitor: " + html_lib.escape(str(celda.get("monitor") or "Sin asignar")))
+                texto = (
+                    f"<strong>{html_lib.escape(str(celda['asignatura']))}</strong><br>"
+                    f"{html_lib.escape(str(carrera or ''))}<br>"
+                    "<span style='font-size:0.62rem; color:#3f4650;'>" + "<br>".join(nombres) + "</span>"
+                )
+
                 html += f"""
                 <td class='horario-editable-cell' tabindex='0' aria-haspopup='menu' aria-label='Editar {html_lib.escape(LABS_NAMES_HORARIO[lab], quote=True)}, {html_lib.escape(hora, quote=True)}' {data_attrs} style='
                     border:1px solid #d8dee8; 
@@ -629,7 +635,8 @@ def mostrar_horario_general():
                 const bodies = doc.querySelectorAll(".horario-general-body-scroll");
                 const header = headers[headers.length - 1];
                 const body = bodies[bodies.length - 1];
-                const horarioUiVersion = "20260825-scroll-restore-v14";
+                const horarioUiVersion = "stable-delegated-v15";
+                const renderedDay = __DIA_HORARIO__;
                 const carreraOptions = __OPCIONES_CARRERA__;
 
                 if (!header || !body) {
@@ -912,16 +919,10 @@ def mostrar_horario_general():
                     });
                 }
 
-                if (body.dataset.horarioContextVersion !== horarioUiVersion) {
-                    body.dataset.horarioContextBound = "false";
-                    body.dataset.horarioContextVersion = horarioUiVersion;
-                }
-                if (body.dataset.horarioContextBound !== "true") {
-                    body.dataset.horarioContextBound = "true";
-
-                    body.addEventListener("contextmenu", function (event) {
+                {
+                    function onCellContext(event) {
                         const cell = event.target.closest(".horario-editable-cell");
-                        if (!cell || !body.contains(cell)) return;
+                        if (!cell) return;
 
                         event.preventDefault();
                         event.stopPropagation();
@@ -929,15 +930,8 @@ def mostrar_horario_general():
                         const x = event.clientX || (rect.left + 12);
                         const y = event.clientY || (rect.top + 12);
                         showMenu(cell, x, y);
-                    });
-
-                    body.addEventListener("keydown", function (event) {
-                        const cell = event.target.closest(".horario-editable-cell");
-                        if (!cell || (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))) return;
-                        event.preventDefault();
-                        const rect = cell.getBoundingClientRect();
-                        showMenu(cell, rect.left + 12, rect.top + 12);
-                    });
+                    }
+                    doc.addEventListener("contextmenu", onCellContext);
 
                     menu.querySelector('[data-menu-action="editar"]').addEventListener("click", function () {
                         if (menu.currentCell) {
@@ -946,7 +940,7 @@ def mostrar_horario_general():
                         hideMenu(false);
                     });
 
-                    function onDocumentClick() {
+                    function onDocumentClick(event) {
                         hideMenu(false);
                     }
                     function onDocumentKeydown(event) {
@@ -956,6 +950,7 @@ def mostrar_horario_general():
                     doc.addEventListener("keydown", onDocumentKeydown);
                     body.addEventListener("scroll", function () { hideMenu(false); }, { passive: true });
                     window.parent.__horarioContextCleanup = function () {
+                        doc.removeEventListener("contextmenu", onCellContext);
                         doc.removeEventListener("click", onDocumentClick);
                         doc.removeEventListener("keydown", onDocumentKeydown);
                         window.parent.__horarioContextCleanup = null;
@@ -966,121 +961,26 @@ def mostrar_horario_general():
             setup();
         })();
         </script>
-        """.replace("__OPCIONES_CARRERA__", opciones_carrera_js),
+        """.replace("__OPCIONES_CARRERA__", opciones_carrera_js).replace("__DIA_HORARIO__", json.dumps(dia_seleccionado)),
         height=0,
         scrolling=False,
     )
 
-    # ===== FORMULARIO DE EDICIÓN =====
-    # ===== FORMULARIO INLINE =====
-    @st.dialog("Editar celda del horario")
-    def mostrar_dialogo_editar_horario():
-        datos_edit = st.session_state.horario_editar
-        dia = datos_edit["dia"]
-        hora = datos_edit["hora"]
-        lab = datos_edit["laboratorio"]
-        datos = datos_edit["datos"] or {}
+def seleccionar_motivo_multa(key):
+    opciones = [*multas.MOTIVOS_ESTANDAR, "OTRAS"]
+    seleccion = st.selectbox("Razón de la multa", opciones, index=None,
+                             placeholder="Seleccione una razón", key=key + "_opcion")
+    if seleccion == "OTRAS":
+        return st.text_input("Escriba la razón de la multa", key=key + "_otra").strip()
+    return seleccion or ""
 
-        st.markdown(
-            f"""
-            <div style="background:#ffffff; border:1px solid #e2d8cb; border-left:6px solid #9f1d24; border-radius:8px; padding:0.8rem 1rem; margin-bottom:1rem;">
-                <strong style="color:#731116;">{LABS_NAMES_HORARIO[lab]}</strong>
-                <div style="color:#6b4f00; font-size:0.9rem;">{dia} | {hora}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        col1, col2 = st.columns(2)
-        with col1:
-            asignatura = st.text_input("Asignatura", value=datos.get("asignatura", ""))
-            carrera_index = opciones_carrera.index(datos.get("carrera", "")) if datos.get("carrera") in opciones_carrera else 0
-            carrera = st.selectbox(
-                "Carrera",
-                options=opciones_carrera,
-                index=carrera_index,
-                key="horario_carrera_select_dialog",
-            )
-        with col2:
-            monitor = st.text_input("Monitor", value=datos.get("monitor", ""))
-            profesor = st.text_input("Profesor", value=datos.get("profesor", ""))
-
-        st.divider()
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            if st.button("Guardar cambios", use_container_width=True):
-                if asignatura.strip():
-                    hf.set_horario_celda(dia, hora, lab, asignatura, carrera, monitor, profesor)
-                else:
-                    hf.delete_horario_celda(dia, hora, lab)
-                st.session_state.horario_editar = None
-                st.rerun()
-        with col2:
-            if st.button("Eliminar", use_container_width=True):
-                hf.delete_horario_celda(dia, hora, lab)
-                st.session_state.horario_editar = None
-                st.rerun()
-        with col3:
-            if st.button("Cancelar", use_container_width=True):
-                st.session_state.horario_editar = None
-                st.rerun()
-
-    if False and st.session_state.horario_editar is not None:
-        mostrar_dialogo_editar_horario()
-
-    if False and st.session_state.horario_editar is not None:
-        datos_edit = st.session_state.horario_editar
-        dia = datos_edit["dia"]
-        hora = datos_edit["hora"]
-        lab = datos_edit["laboratorio"]
-        datos = datos_edit["datos"] or {}
-
-        st.subheader(" Modificar información de la celda")
-        st.write(f"**Día:** {dia} | **Hora:** {hora} | **Laboratorio:** {LABS_NAMES_HORARIO[lab]}")
-        st.divider()
-
-        col1, col2 = st.columns(2)
-        with col1:
-            asignatura = st.text_input("Asignatura", value=datos.get("asignatura", ""))
-            carrera_index = opciones_carrera.index(datos.get("carrera", "")) if datos.get("carrera") in opciones_carrera else 0
-            carrera = st.selectbox(
-                "Carrera",
-                options=opciones_carrera,
-                index=carrera_index,
-                key="horario_carrera_select"
-            )
-        with col2:
-            monitor = st.text_input("Monitor", value=datos.get("monitor", ""))
-            profesor = st.text_input("Profesor", value=datos.get("profesor", ""))
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            if st.button(" Guardar cambios", use_container_width=True):
-                if asignatura.strip():
-                    hf.set_horario_celda(dia, hora, lab, asignatura, carrera, monitor, profesor)
-                else:
-                    hf.delete_horario_celda(dia, hora, lab)
-                st.session_state.horario_editar = None
-                st.rerun()
-        with col2:
-            if st.button(" Eliminar", use_container_width=True):
-                hf.delete_horario_celda(dia, hora, lab)
-                st.session_state.horario_editar = None
-                st.rerun()
-        with col3:
-            if st.button(" Cancelar", use_container_width=True):
-                st.session_state.horario_editar = None
-                st.rerun()
-# ============================================================
-#  4. GESTIÓN DE MULTAS (DEUDORES)
-# ============================================================
 
 def mostrar_formulario_agregar_multa(codigo):
     """
     Muestra el formulario para agregar una nueva multa a un estudiante.
     """
     st.markdown('<p class="deudores-panel-title">Agregar nueva multa</p>', unsafe_allow_html=True)
-    with st.form(key=f"form_agregar_{codigo}"):
+    with st.container(border=True):
         col1, col2 = st.columns(2)
         with col1:
             fecha_multa = st.date_input("Fecha de multa", datetime.now().date())
@@ -1091,10 +991,10 @@ def mostrar_formulario_agregar_multa(codigo):
                 key=f"asigna_v2_{codigo}"
             )
         with col2:
-            motivo = st.text_area("Motivo", height=80)
+            motivo = seleccionar_motivo_multa(f"perfil_motivo_{codigo}")
             sancion = st.text_input("Sanción")
         
-        if st.form_submit_button(" Guardar multa"):
+        if st.button("Guardar multa", key=f"guardar_multa_{codigo}"):
             if not motivo:
                 st.error(" El motivo es obligatorio")
             elif not es_tecnico_valido(tecnico_asigna):
@@ -1260,6 +1160,21 @@ def mostrar_perfil_estudiante(codigo):
                 st.divider()
 
 def mostrar_deudores():
+    from excel_multas import importar_multas_excel, plantilla_multas_excel
+    with st.expander("Importar multas desde Excel"):
+        st.caption("Nombre del estudiante es obligatorio y debe ir inmediatamente después de Código. La columna Correo usuario puede contener celdas vacías.")
+        st.download_button("Descargar plantilla de multas", plantilla_multas_excel(),
+                           file_name="plantilla_multas.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.caption("Los reportes existentes se actualizan por código y fecha de sanción. La carga es completa o no se guarda ningún cambio.")
+        archivo = st.file_uploader("Archivo de sanciones", type=["xlsx"], key="excel_multas")
+        if st.button("Importar multas", disabled=archivo is None, key="importar_multas"):
+            try:
+                resultado = importar_multas_excel(archivo)
+            except (ValueError, OSError) as error:
+                st.error(str(error))
+            else:
+                st.success(f"{resultado['insertadas']} nuevas, {resultado['actualizadas']} actualizadas y {resultado['repetidas']} filas repetidas omitidas.")
     df_deudores = multas.obtener_deudores()
 
     st.markdown(
@@ -1406,6 +1321,7 @@ def mostrar_deudores():
                         for _, row in df_deudores.iterrows()
                     }
                     verificacion["Multas activas"] = verificacion["Codigo"].map(conteos).fillna(0).astype(int)
+                    verificacion["Fecha y concepto de cada multa"] = verificacion["Codigo"].map(multas.detalles_multas_activas()).fillna("")
                     verificacion["Estado"] = verificacion["Multas activas"].apply(
                         lambda n: "Apto para Paz y Salvo" if n == 0 else "No Apto / Con Deuda Activa"
                     )
@@ -1515,7 +1431,7 @@ def mostrar_deudores():
                         key="deudor_nueva_multa_codigo",
                     )
 
-                    with st.form("form_nueva_multa_directa"):
+                    with st.container(border=True):
                         col_a, col_b = st.columns(2)
                         with col_a:
                             fecha_multa = st.date_input("Fecha de multa", datetime.now().date(), key="directa_fecha_multa")
@@ -1526,10 +1442,10 @@ def mostrar_deudores():
                                 key="directa_tecnico_asigna_v2",
                             )
                         with col_b:
-                            motivo = st.text_area("Motivo *", height=90, key="directa_motivo_multa")
+                            motivo = seleccionar_motivo_multa("directa_motivo_multa")
                             sancion = st.text_input("Sancion", key="directa_sancion_multa")
 
-                        guardar_multa = st.form_submit_button("Guardar multa")
+                        guardar_multa = st.button("Guardar multa", key="guardar_multa_directa")
 
                     if guardar_multa:
                         if not motivo.strip():
@@ -1552,7 +1468,6 @@ def mostrar_deudores():
 
     if df_deudores.empty and not search_term:
         st.info("No hay estudiantes con multas activas.")
-        return
 
     if search_term:
         df_filtrado = df_deudores[
@@ -1629,88 +1544,104 @@ def mostrar_deudores():
                 st.session_state[pagina_key] += 1
                 st.rerun()
         st.divider()
-        st.markdown('<p class="deudores-panel-title">Reporte detallado de multas</p>', unsafe_allow_html=True)
-        st.caption("Informe institucional completo para seguimiento administrativo, conciliación de pagos y auditoría.")
-        query_detalle = """
-            SELECT
-                m.codigo_estudiante,
-                e.nombres,
-                e.proyecto as carrera,
-                m.fecha_multa,
-                m.fecha_pago,
-                m.motivo,
-                m.sancion,
-                m.tecnico_asigna,
-                m.tecnico_recibe,
-                CASE WHEN m.pagado = 'SI' THEN 'Pagada' ELSE 'Activa' END AS estado
-            FROM multas m
-            LEFT JOIN estudiantes e ON m.codigo_estudiante = e.codigo
-            ORDER BY CASE WHEN m.pagado = 'NO' THEN 0 ELSE 1 END, e.nombres, m.fecha_multa DESC
-        """
-        df_detalle = db.fetch_df(query_detalle)
-        if not df_detalle.empty:
-            filtro_col, descarga_col = st.columns([2.2, 1])
-            with filtro_col:
-                filtro_estado = st.segmented_control(
-                    "Estado incluido",
-                    ["Todas", "Activas", "Pagadas"],
-                    default="Todas",
-                    key="filtro_reporte_multas",
-                )
-            if filtro_estado == "Activas":
-                df_reporte = df_detalle[df_detalle["estado"] == "Activa"].copy()
-            elif filtro_estado == "Pagadas":
-                df_reporte = df_detalle[df_detalle["estado"] == "Pagada"].copy()
-            else:
-                df_reporte = df_detalle.copy()
-
-            total_reporte = len(df_reporte)
-            activas_reporte = int((df_reporte["estado"] == "Activa").sum())
-            pagadas_reporte = int((df_reporte["estado"] == "Pagada").sum())
-            estudiantes_reporte = int(df_reporte["codigo_estudiante"].nunique())
-            metrica_1, metrica_2, metrica_3, metrica_4 = st.columns(4)
-            metrica_1.metric("Registros", total_reporte)
-            metrica_2.metric("Activas", activas_reporte)
-            metrica_3.metric("Pagadas", pagadas_reporte)
-            metrica_4.metric("Estudiantes", estudiantes_reporte)
-
-            nombres_columnas = {
-                "codigo_estudiante": "Código",
-                "nombres": "Estudiante",
-                "carrera": "Proyecto curricular",
-                "fecha_multa": "Fecha de multa",
-                "fecha_pago": "Fecha de pago",
-                "motivo": "Motivo",
-                "sancion": "Sanción",
-                "tecnico_asigna": "Técnico que asigna",
-                "tecnico_recibe": "Técnico que recibe",
-                "estado": "Estado",
-            }
-            df_exportar = df_reporte.rename(columns=nombres_columnas)
-            excel_multas = crear_excel_institucional(
-                df_exportar,
-                "Reporte detallado de multas",
-                "Seguimiento de obligaciones, sanciones y paz y salvos",
-                [
-                    ("Filtro", filtro_estado),
-                    ("Registros", total_reporte),
-                    ("Multas activas", activas_reporte),
-                    ("Multas pagadas", pagadas_reporte),
-                    ("Estudiantes incluidos", estudiantes_reporte),
-                ],
-                nombre_hoja="Multas",
+    st.markdown('<p class="deudores-panel-title">Reporte detallado de multas</p>', unsafe_allow_html=True)
+    st.caption("Informe institucional completo para seguimiento administrativo, conciliación de pagos y auditoría.")
+    query_detalle = """
+        SELECT
+            m.codigo_estudiante,
+            e.nombres,
+            e.proyecto as carrera,
+            m.fecha_multa,
+            m.fecha_pago,
+            m.motivo,
+            m.sancion,
+            m.tecnico_asigna,
+            m.tecnico_recibe,
+            CASE WHEN m.pagado = 'SI' THEN 'Pagada' ELSE 'Activa' END AS estado
+        FROM multas m
+        LEFT JOIN estudiantes e ON m.codigo_estudiante = e.codigo
+        ORDER BY CASE WHEN m.pagado = 'NO' THEN 0 ELSE 1 END, e.nombres, m.fecha_multa DESC
+    """
+    df_detalle = db.fetch_df(query_detalle)
+    if not df_detalle.empty:
+        fechas_reporte = pd.to_datetime(df_detalle["fecha_multa"], format="mixed", dayfirst=True, errors="coerce")
+        fechas_iso = df_detalle["fecha_multa"].astype(str).str.match(r"^\d{4}-\d{2}-\d{2}")
+        fechas_reporte.loc[fechas_iso] = pd.to_datetime(df_detalle.loc[fechas_iso, "fecha_multa"], format="ISO8601", errors="coerce")
+        fechas_reporte = fechas_reporte.dt.date
+        validas = fechas_reporte.dropna()
+        desde_col, hasta_col = st.columns(2)
+        desde = desde_col.date_input("Multas desde", value=min(validas) if not validas.empty else datetime.now().date(), key="multas_reporte_desde")
+        hasta = hasta_col.date_input("Multas hasta", value=max(validas) if not validas.empty else datetime.now().date(), key="multas_reporte_hasta")
+        if desde > hasta:
+            st.error("La fecha inicial no puede ser posterior a la final.")
+            return
+        if fechas_reporte.isna().any():
+            st.warning("Hay multas sin una fecha válida; no se incluyen en el rango seleccionado.")
+        df_detalle = df_detalle[fechas_reporte.notna() & (fechas_reporte >= desde) & (fechas_reporte <= hasta)]
+        filtro_col, descarga_col = st.columns([2.2, 1])
+        with filtro_col:
+            filtro_estado = st.segmented_control(
+                "Estado incluido",
+                ["Todas", "Activas", "Pagadas"],
+                default="Todas",
+                key="filtro_reporte_multas",
             )
-            with descarga_col:
-                st.write("")
-                st.write("")
-                st.download_button(
-                    label="Descargar Excel institucional",
-                    data=excel_multas,
-                    file_name=f"reporte_multas_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="descargar_deudores_detalle",
-                    use_container_width=True,
-                )
+        if filtro_estado == "Activas":
+            df_reporte = df_detalle[df_detalle["estado"] == "Activa"].copy()
+        elif filtro_estado == "Pagadas":
+            df_reporte = df_detalle[df_detalle["estado"] == "Pagada"].copy()
+        else:
+            df_reporte = df_detalle.copy()
+
+        total_reporte = len(df_reporte)
+        activas_reporte = int((df_reporte["estado"] == "Activa").sum())
+        pagadas_reporte = int((df_reporte["estado"] == "Pagada").sum())
+        estudiantes_reporte = int(df_reporte["codigo_estudiante"].nunique())
+        metrica_1, metrica_2, metrica_3, metrica_4 = st.columns(4)
+        metrica_1.metric("Registros", total_reporte)
+        metrica_2.metric("Activas", activas_reporte)
+        metrica_3.metric("Pagadas", pagadas_reporte)
+        metrica_4.metric("Estudiantes", estudiantes_reporte)
+
+        nombres_columnas = {
+            "codigo_estudiante": "Código",
+            "nombres": "Estudiante",
+            "carrera": "Proyecto curricular",
+            "fecha_multa": "Fecha de multa",
+            "fecha_pago": "Fecha de pago",
+            "motivo": "Detalle de la multa",
+            "sancion": "Sanción",
+            "tecnico_asigna": "Técnico que asigna",
+            "tecnico_recibe": "Técnico que recibe",
+            "estado": "Estado",
+        }
+        df_exportar = df_reporte.rename(columns=nombres_columnas)
+        excel_multas = crear_excel_institucional(
+            df_exportar,
+            "Reporte detallado de multas",
+            "Seguimiento de obligaciones, sanciones y paz y salvos",
+            [
+                ("Filtro", filtro_estado),
+                ("Desde", desde.isoformat()),
+                ("Hasta", hasta.isoformat()),
+                ("Registros", total_reporte),
+                ("Multas activas", activas_reporte),
+                ("Multas pagadas", pagadas_reporte),
+                ("Estudiantes incluidos", estudiantes_reporte),
+            ],
+            nombre_hoja="Multas",
+        )
+        with descarga_col:
+            st.write("")
+            st.write("")
+            st.download_button(
+                label="Descargar Excel institucional",
+                data=excel_multas,
+                file_name=f"reporte_multas_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="descargar_deudores_detalle",
+                use_container_width=True,
+            )
 
     if search_term and df_filtrado.empty:
         st.info("El estudiante no tiene multas activas. Buscando en la base de datos de estudiantes...")

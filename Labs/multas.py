@@ -4,6 +4,22 @@ import database as db
 from datetime import datetime
 import pandas as pd
 
+MOTIVOS_ESTANDAR = (
+    "ABANDONO O NO DEVOLUCIÓN DE EQUIPOS",
+    "AGRESIÓN AL PERSONAL O USUARIOS",
+    "ALTERACIÓN DE EQUIPOS O ELEMENTOS",
+    "CONSUMO DE ALIMENTOS O BEBIDAS",
+    "ACTIVIDADES O EQUIPOS NO AUTORIZADOS",
+    "USO DE ELEMENTOS DE DISTRACCIÓN",
+    "FUMAR EN LABORATORIOS",
+    "USO NO AUTORIZADO DE EQUIPOS",
+    "INGRESO BAJO EFECTOS DE SUSTANCIAS",
+    "SIN ELEMENTOS DE SEGURIDAD",
+    "INGRESO DE NIÑOS O MASCOTAS",
+    "TRASLADO NO AUTORIZADO DE EQUIPOS",
+    "DOCUMENTOS FALSOS O SUPLANTACIÓN",
+)
+
 # ============================================================
 #  FUNCIONES PARA LA GESTIÓN DE MULTAS
 # ============================================================
@@ -29,13 +45,30 @@ def obtener_deudores():
     return db.fetch_df(query)
 
 
+def obtener_motivos_registrados():
+    """Conceptos existentes; no inventa lineamientos institucionales."""
+    return [row[0] for row in db.ejecutar(
+        "SELECT DISTINCT trim(motivo) FROM multas WHERE trim(coalesce(motivo,'')) != '' ORDER BY 1",
+        fetch=True) if row[0] != "Otras"]
+
+
+def detalles_multas_activas():
+    detalles = {}
+    for codigo, fecha, motivo in db.ejecutar(
+        "SELECT codigo_estudiante,fecha_multa,motivo FROM multas WHERE pagado='NO' ORDER BY fecha_multa,id",
+        fetch=True,
+    ):
+        detalles.setdefault(str(codigo).strip(), []).append(f"{fecha or 'Sin fecha'}: {motivo or 'Sin concepto registrado'}")
+    return {codigo: "\n".join(filas) for codigo, filas in detalles.items()}
+
+
 def obtener_multas_estudiante(codigo):
     """
     Retorna un DataFrame con todas las multas de un estudiante (activas e históricas).
     """
     query = """
         SELECT id, fecha_multa, fecha_pago, motivo, sancion, 
-               tecnico_asigna, tecnico_recibe, pagado
+               tecnico_asigna, tecnico_recibe, pagado, correo_usuario, observaciones
         FROM multas
         WHERE codigo_estudiante = ?
         ORDER BY fecha_multa DESC

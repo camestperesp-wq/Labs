@@ -1,1 +1,5 @@
 mi_agenda.db 
+auth.db
+auth.db-*
+.streamlit/secrets.toml
+__pycache__/

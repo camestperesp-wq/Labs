@@ -97,6 +97,8 @@ def opcion_dia_actual(fechas_semana, opciones_dias):
 
 
 st.set_page_config(page_title="LABS", layout="wide")
+from auth import require_login
+require_login()
 inicializar_estado()
 db.init_db()
 
@@ -525,8 +527,8 @@ st.markdown("""
         }
 
         .labs-seal {
-            width: 62px !important;
-            height: 62px !important;
+            width: clamp(88px, 9vw, 128px) !important;
+            height: clamp(100px, 10vw, 144px) !important;
             border-radius: 0 !important;
             background: #ffffff !important;
             border: 0 !important;
@@ -970,8 +972,8 @@ st.markdown(
             <div class="labs-seal">{escudo_html}</div>
             <div>
                 <div class="labs-hero-kicker">Sistema de Laboratorios de Electrica, Electronica y Física</div>
-                <h1>Centro de Operacion de Laboratorios</h1>
-                <p>Panel operativo para coordinar laboratorios, disponibilidad, asistencias y novedades del dia.</p>
+                <h1>Gestión de laboratorios</h1>
+                <p>Reservas, préstamos y atención a la comunidad académica.</p>
                 <div class="labs-title-meta">
                     <span>Facultad de Ingenieria</span>
                     <span>Gestion academica y tecnica</span>

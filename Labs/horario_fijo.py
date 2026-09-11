@@ -2,6 +2,14 @@
 
 import database as db
 
+
+def obtener_docentes():
+    """Docentes disponibles en el horario y en los préstamos ya registrados."""
+    filas = db.ejecutar("""SELECT trim(profesor) FROM horario_fijo WHERE trim(coalesce(profesor,'')) != ''
+        UNION SELECT trim(nombres) FROM reservas WHERE codigo='PROFESOR'
+        AND trim(coalesce(nombres,'')) != '' ORDER BY 1 COLLATE NOCASE""", fetch=True)
+    return [fila[0] for fila in filas]
+
 def normalizar(texto):
     """Elimina espacios extra y convierte a minúsculas para comparar."""
     return texto.strip().lower()
@@ -24,9 +32,9 @@ def get_horario_celda(dia, hora, laboratorio):
 
 def set_horario_celda(dia, hora, laboratorio, asignatura, carrera, monitor, profesor):
     """Guarda el laboratorio sin modificar (tal como viene)."""
-    if str(carrera or "").strip() == "Adicional":
+    if not str(asignatura or "").strip() and str(carrera or "").strip() == "Adicional":
         asignatura = "Adicional"
-    elif str(carrera or "").strip() == "Práctica Libre":
+    elif not str(asignatura or "").strip() and str(carrera or "").strip() == "Práctica Libre":
         asignatura = "Práctica Libre"
 
     existente = db.ejecutar("""SELECT COUNT(*) FROM horario_fijo 

@@ -117,6 +117,13 @@ def get_bancos_ocupados(lab, fecha, hora):
     return []
 
 
+def _nombre_en_celda(tipo, nombre):
+    texto = str(nombre or "Sin asignar").replace("\\", "\\\\")
+    for caracter in "*_[]`":
+        texto = texto.replace(caracter, "\\" + caracter)
+    return f"*{tipo}: {texto}*"
+
+
 def formatear_etiqueta_horario(horario):
     """
     Construye una etiqueta compacta con la informaciÃ³n del horario fijo.
@@ -126,14 +133,16 @@ def formatear_etiqueta_horario(horario):
 
     asignatura = horario.get("asignatura", "").strip()
     carrera = horario.get("carrera", "").strip()
-    profesor = horario.get("profesor", "").strip()
 
     partes = [asignatura]
     if carrera:
         partes.append(f"({carrera})")
-    if profesor:
-        partes.append(f"Prof: {profesor}")
 
+    if str(horario.get("carrera") or "").casefold() in ("práctica libre", "practica libre"):
+        partes.append(_nombre_en_celda("Monitor", horario.get("monitor")))
+    else:
+        partes.append(_nombre_en_celda("Docente", horario.get("profesor")))
+        partes.append(_nombre_en_celda("Monitor", horario.get("monitor")))
     return "\n".join(partes)
 
 # ==================== CALENDARIO INTERACTIVO ====================
@@ -562,23 +571,10 @@ def mostrar_formulario_reserva_profesor():
         col1, col2 = st.columns(2)
         with col1:
             motivo = st.text_input("Motivo de la reserva *", placeholder="Ej: Examen, clase especial...")
-            if profesor_sugerido:
-                opcion_profesor = st.selectbox(
-                    "Docente",
-                    [profesor_sugerido, "Otro docente"],
-                    key=f"docente_reserva_{lab}_{fecha_str}_{hora}",
-                )
-                if opcion_profesor == profesor_sugerido:
-                    nombre_profesor = profesor_sugerido
-                    st.caption("Se usarÃ¡ el docente detectado en el horario.")
-                else:
-                    nombre_profesor = st.text_input(
-                        "Nombre del profesor *",
-                        placeholder="Ej: Juan PÃ©rez",
-                        key=f"nombre_profesor_otro_{lab}_{fecha_str}_{hora}",
-                    )
-            else:
-                nombre_profesor = st.text_input("Nombre del profesor *", placeholder="Ej: Juan PÃ©rez")
+            nombre_profesor = st.text_input(
+                "Nombre del docente *", value=profesor_sugerido,
+                key=f"nombre_docente_{lab}_{fecha_str}_{hora}",
+            )
         with col2:
             tecnico = st.selectbox("TÃ©cnico responsable", OPCIONES_TECNICOS, index=0, key=f"tecnico_profesor_v2_{lab}_{fecha_str}_{hora}")
         
@@ -997,7 +993,7 @@ def _normalizar_lab(lab):
 
 def _build_contexto_calendario(dia_seleccionado, fecha_str):
     reservas = db.ejecutar(
-        """SELECT id, hora, laboratorio, banco, codigo, nombres, proyecto, asiste
+        """SELECT id, hora, laboratorio, banco, codigo, nombres, proyecto, asiste, observaciones
         FROM reservas
         WHERE fecha=? AND activo=1""",
         (fecha_str,),
@@ -1019,7 +1015,7 @@ def _build_contexto_calendario(dia_seleccionado, fecha_str):
         "profesor": None,
     })
 
-    for reserva_id, hora_reserva, lab_reserva, banco, codigo, nombres, proyecto, asiste in reservas:
+    for reserva_id, hora_reserva, lab_reserva, banco, codigo, nombres, proyecto, asiste, observaciones in reservas:
         clave = (_normalizar_lab(lab_reserva), hora_reserva)
         slot = slots[clave]
         codigo = codigo or ""
@@ -1038,6 +1034,7 @@ def _build_contexto_calendario(dia_seleccionado, fecha_str):
                     "nombre": nombres or "",
                     "asignatura": proyecto or "",
                     "estado": asistencia,
+                    "es_prestamo_docente": str(observaciones or "").startswith("Reserva de profesor:"),
                 }
 
         if activa_para_ocupacion and not es_profesor_no:
@@ -1069,6 +1066,7 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
     profesor_nombre = ""
     profesor_asignatura = ""
     estado_profesor = ""
+    es_prestamo_docente = False
 
     if contexto:
         clave = (_normalizar_lab(lab), hora)
@@ -1095,11 +1093,12 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
                 profesor_nombre = profesor["nombre"]
                 profesor_asignatura = profesor["asignatura"]
                 estado_profesor = profesor["estado"]
+                es_prestamo_docente = profesor.get("es_prestamo_docente", False)
     else:
         ocupados = get_ocupados(lab, fecha_str, hora)
 
         r_profesor = db.ejecutar(
-            """SELECT nombres, proyecto, asiste FROM reservas
+            """SELECT nombres, proyecto, asiste, observaciones FROM reservas
             WHERE laboratorio=? AND fecha=? AND hora=?
             AND codigo='PROFESOR' AND activo=1
             AND asiste IS NOT NULL AND asiste != ''
@@ -1112,6 +1111,7 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
         profesor_nombre = r_profesor[0][0] if tiene_profesor_respaldo else ""
         profesor_asignatura = r_profesor[0][1] if tiene_profesor_respaldo else ""
         estado_profesor = r_profesor[0][2] if tiene_profesor_respaldo else ""
+        es_prestamo_docente = bool(tiene_profesor_respaldo and str(r_profesor[0][3] or "").startswith("Reserva de profesor:"))
 
         horario = hf.get_horario_celda(dia_seleccionado, hora, lab)
 
@@ -1134,7 +1134,7 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
 
     if tiene_profesor and estado_profesor == "Si":
         estado = "profesor_si"
-        etiqueta = f"DOCENTE ASISTIO\n{profesor_asignatura}\n{profesor_nombre}"
+        etiqueta = f"DOCENTE ASISTIO\n{profesor_asignatura}"
         detalle = f"(Asistió) | {profesor_asignatura} | {profesor_nombre}"
     elif tiene_profesor and estado_profesor == "No":
         estado = "profesor_no"
@@ -1142,7 +1142,7 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
         detalle = f"(No asistió) | {profesor_asignatura} | {profesor_nombre} | {ocupados}/{total}"
     elif es_adicional:
         nombre_bloque = horario.get("asignatura") or "Adicional"
-        es_practica_libre = "práctica libre" in nombre_bloque.lower() or "practica libre" in nombre_bloque.lower()
+        es_practica_libre = horario.get("carrera") == "Práctica Libre" or "práctica libre" in nombre_bloque.lower() or "practica libre" in nombre_bloque.lower()
         estado = "practica_libre" if es_practica_libre else "adicional"
         if reservas_activas or ocupados > 0:
             etiqueta = f"{nombre_bloque}\n{ocupados}/{total}"
@@ -1150,6 +1150,10 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
         else:
             etiqueta = f"{nombre_bloque}\n{ocupados}/{total}"
             detalle = f"{nombre_bloque} libre | {ocupados}/{total}"
+        if es_practica_libre:
+            monitor = horario.get("monitor") or "Sin monitor asignado"
+            etiqueta += "\n" + _nombre_en_celda("Monitor", monitor)
+            detalle += f" | Monitor: {monitor}"
     elif tiene_asignatura and not reservas_activas:
         estado = "asignatura"
         etiqueta = formatear_etiqueta_horario(horario)
@@ -1162,6 +1166,11 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
         estado = "ocupado"
         etiqueta = f"Ocupado\n{ocupados}/{total}"
         detalle = f"Ocupado | {ocupados}/{total}"
+
+    if tiene_profesor:
+        etiqueta += "\n" + _nombre_en_celda("Docente", profesor_nombre)
+        if not es_prestamo_docente and horario:
+            etiqueta += "\n" + _nombre_en_celda("Monitor", horario.get("monitor"))
 
     return {
         "total": total,
@@ -1236,9 +1245,9 @@ def _estilo_celda_reserva(estado):
             "weight": "750",
         },
         "practica_libre": {
-            "background": "#E7D8CC",
-            "color": "#4A2E22",
-            "border": "#B88968",
+            "background": "#BFE8E3",
+            "color": "#124E49",
+            "border": "#26877D",
             "shadow": "none",
             "weight": "800",
         },
@@ -1284,8 +1293,8 @@ def _inyectar_estilo_boton_celda(marker_id, estilo):
         <style id="{marker_id}">
             div[data-testid="stElementContainer"]:has(style#{marker_id}) + div[data-testid="stElementContainer"] button {{
                 background: {estilo["background"]} !important;
-                height: 160px !important;
-                min-height: 160px !important;
+                height: auto !important;
+                min-height: 215px !important;
                 border: 2px solid {estilo["border"]} !important;
                 border-radius: 4px !important;
                 padding: 0.55rem !important;
@@ -1309,6 +1318,11 @@ def _inyectar_estilo_boton_celda(marker_id, estilo):
                 word-break: break-word !important;
                 margin: 0 !important;
                 max-height: none !important;
+            }}
+            div[data-testid="stElementContainer"]:has(style#{marker_id}) + div[data-testid="stElementContainer"] button em {{
+                font-size: 0.64rem !important;
+                font-style: normal !important;
+                font-weight: 400 !important;
             }}
             div[data-testid="stElementContainer"]:has(style#{marker_id}) + div[data-testid="stElementContainer"] button:hover {{
                 background: {estilo["background"]} !important;
@@ -1429,7 +1443,7 @@ def mostrar_calendario_interactivo(dia_seleccionado):
                 overflow: hidden;
             }
             .reserva-native-time {
-                height: 160px;
+                min-height: 215px;
                 border: 1px solid #ddd;
                 background: #f9f9f9;
                 display: flex;
@@ -1820,22 +1834,10 @@ def _render_formulario_reserva_docente(data, profesor_data=None):
         col1, col2 = st.columns(2)
         with col1:
             motivo = st.text_input("Motivo de la reserva *", placeholder="Ej: Examen, clase especial...")
-            if profesor_sugerido:
-                opcion_profesor = st.selectbox(
-                    "Docente",
-                    [profesor_sugerido, "Otro docente"],
-                    key=f"docente_modal_{lab}_{fecha_str}_{hora}",
-                )
-                if opcion_profesor == profesor_sugerido:
-                    nombre_profesor = profesor_sugerido
-                else:
-                    nombre_profesor = st.text_input(
-                        "Nombre del profesor *",
-                        placeholder="Ej: Juan Pérez",
-                        key=f"nombre_profesor_modal_otro_{lab}_{fecha_str}_{hora}",
-                    )
-            else:
-                nombre_profesor = st.text_input("Nombre del profesor *", placeholder="Ej: Juan Pérez")
+            nombre_profesor = st.text_input(
+                "Nombre del docente *", value=profesor_sugerido,
+                key=f"nombre_docente_{lab}_{fecha_str}_{hora}",
+            )
         with col2:
             tecnico = st.selectbox("Técnico responsable", OPCIONES_TECNICOS, index=0, key=f"tecnico_profesor_modal_v2_{lab}_{fecha_str}_{hora}")
 
@@ -1948,6 +1950,12 @@ def _render_detalle_celda_contenido():
     st.write(f"**Fecha:** {formatear_fecha_espanol(fecha_str)}")
     st.write(f"**Hora:** {hora}")
     st.write(f"**Ocupación:** {ocupados}/{total}")
+
+    if asignatura_info:
+        st.write("**Actividad:**", asignatura_info.get("asignatura") or "Sin nombre")
+        st.write("**Tipo / proyecto:**", asignatura_info.get("carrera") or "Sin especificar")
+        st.write("**Docente:**", asignatura_info.get("profesor") or "Sin asignar")
+        st.write("**Monitor:**", asignatura_info.get("monitor") or "Sin asignar")
 
     df = res.get_reservas_fecha_lab_hora(fecha_str, lab, hora)
 

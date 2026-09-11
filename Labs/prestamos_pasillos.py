@@ -90,12 +90,12 @@ def cargar_inventario_excel(archivo):
     alias = {
         "placa": ("numero de placa", "numero placa", "placa"),
         "nombre": ("nombre del equipo", "nombre equipo", "equipo", "nombre"),
-        "numero_interno": ("numero interno", "nro interno", "interno"),
+        "numero_interno": ("numero interno", "nro interno", "interno", "id_elemento", "codigo_inventario"),
     }
     seleccion = {}
     for destino, opciones in alias.items():
         seleccion[destino] = next((columnas[o] for o in opciones if o in columnas), None)
-        if seleccion[destino] is None:
+        if seleccion[destino] is None and destino != "placa":
             raise ValueError(
                 "El Excel debe incluir: Número de placa, Nombre del equipo y Número interno."
             )
@@ -104,7 +104,7 @@ def cargar_inventario_excel(archivo):
     for numero_fila, fila in tabla.iterrows():
         try:
             registros.append((
-                _texto_opcional(fila[seleccion["placa"]]),
+                _texto_opcional(fila[seleccion["placa"]]) if seleccion["placa"] else None,
                 _texto(fila[seleccion["nombre"]], "Nombre del equipo"),
                 _texto(fila[seleccion["numero_interno"]], "Número interno"),
             ))
@@ -121,15 +121,21 @@ def cargar_inventario_excel(archivo):
 
     try:
         with db.get_connection() as conn:
-            conn.executemany(
-                """INSERT INTO equipos_pasillo (placa, nombre, numero_interno)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(placa) DO UPDATE SET
-                       nombre=excluded.nombre,
-                       numero_interno=excluded.numero_interno,
-                       activo=1""",
-                registros,
-            )
+            conn.execute("BEGIN IMMEDIATE")
+            for placa, nombre, numero_interno in registros:
+                coincidencias = conn.execute(
+                    "SELECT id,placa FROM equipos_pasillo WHERE numero_interno=? OR placa=?",
+                    (numero_interno, placa),
+                ).fetchall()
+                if len(coincidencias) > 1:
+                    raise ValueError("La placa y el número interno corresponden a equipos diferentes.")
+                if coincidencias:
+                    conn.execute("""UPDATE equipos_pasillo SET placa=?,nombre=?,numero_interno=?,activo=1
+                                 WHERE id=?""",
+                                 (placa or coincidencias[0][1], nombre, numero_interno, coincidencias[0][0]))
+                else:
+                    conn.execute("INSERT INTO equipos_pasillo(placa,nombre,numero_interno) VALUES (?,?,?)",
+                                 (placa, nombre, numero_interno))
             conn.commit()
     except Exception as error:
         if "UNIQUE constraint failed" in str(error):

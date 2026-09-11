@@ -180,6 +180,8 @@ def init_db():
         c.execute("PRAGMA table_info(multas)")
         columnas_multas = [col[1] for col in c.fetchall()]
         columnas_requeridas = [
+            "correo_usuario",
+            "observaciones",
             "codigo_estudiante",
             "fecha_multa",
             "fecha_pago",
@@ -192,6 +194,16 @@ def init_db():
         for columna in columnas_requeridas:
             if columna not in columnas_multas:
                 c.execute(f"ALTER TABLE multas ADD COLUMN {columna} TEXT")
+
+        # No elimina reportes históricos: impide nuevas colisiones por código/día.
+        for operacion in ("INSERT", "UPDATE"):
+            excluir = "AND id != OLD.id" if operacion == "UPDATE" else ""
+            c.execute(f"""CREATE TRIGGER IF NOT EXISTS multas_clave_{operacion.lower()}
+                BEFORE {operacion} ON multas
+                WHEN EXISTS (SELECT 1 FROM multas
+                    WHERE trim(codigo_estudiante)=trim(NEW.codigo_estudiante)
+                    AND substr(fecha_multa,1,10)=substr(NEW.fecha_multa,1,10) {excluir})
+                BEGIN SELECT RAISE(ABORT, 'Ya existe una multa para ese código y fecha'); END""")
 
         c.execute("CREATE INDEX IF NOT EXISTS idx_reservas_fecha_lab_hora_activo ON reservas(fecha, laboratorio, hora, activo)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_reservas_codigo_fecha_activo ON reservas(codigo, fecha, activo)")

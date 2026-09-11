@@ -30,7 +30,7 @@ def _mostrar_inventario():
     with carga_col:
         with st.container(border=True):
             st.markdown("##### Cargar inventario desde Excel")
-            st.caption("Columnas: Número de placa (puede estar vacía), Nombre del equipo y Número interno.")
+            st.caption("Columnas: Nombre del equipo y Número interno (o ID_Elemento / Código_Inventario). Número de placa es opcional. Los equipos existentes se actualizan sin duplicarlos.")
             archivo = st.file_uploader("Archivo Excel", type=["xlsx"], key="pasillos_inventario_excel")
             if st.button("Cargar inventario", key="pasillos_cargar_excel", disabled=archivo is None):
                 try:
