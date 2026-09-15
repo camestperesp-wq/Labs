@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 import database as db
+import estudiantes as est
 from constants import TECNICOS
 
 
@@ -42,21 +43,22 @@ def _normalizar_columna(valor):
     return "".join(caracter for caracter in texto if not unicodedata.combining(caracter))
 
 
-def registrar_equipo(placa, nombre, numero_interno):
-    placa = _texto_opcional(placa)
+def registrar_equipo(placa, nombre, numero_interno, consumible=False):
+    consumible = bool(consumible)
+    placa = None if consumible else _texto_opcional(placa)
     nombre = _texto(nombre, "Nombre del equipo")
-    numero_interno = _texto(numero_interno, "Número interno")
+    numero_interno = None if consumible else _texto(numero_interno, "N?mero interno")
     try:
         with db.get_connection() as conn:
             conn.execute(
-                """INSERT INTO equipos_pasillo (placa, nombre, numero_interno)
-                   VALUES (?, ?, ?)""",
-                (placa, nombre, numero_interno),
+                """INSERT INTO equipos_pasillo (placa, nombre, numero_interno, consumible)
+                   VALUES (?, ?, ?, ?)""",
+                (placa, nombre, numero_interno, int(consumible)),
             )
             conn.commit()
     except Exception as error:
         if "UNIQUE constraint failed" in str(error):
-            raise ValueError("La placa o el número interno ya están registrados.") from error
+            raise ValueError("La placa o el n?mero interno ya est?n registrados.") from error
         raise
     _invalidar_cache_lecturas()
 
@@ -152,14 +154,20 @@ def obtener_equipos(solo_disponibles=False):
         JOIN prestamos_pasillo p ON p.id=pe.prestamo_id
         WHERE pe.equipo_id=e.id AND p.estado='PRESTADO'
     )"""
-    condicion = f"AND NOT {prestado_sql}" if solo_disponibles else ""
+    condicion = f"AND (e.consumible=1 OR NOT {prestado_sql})" if solo_disponibles else ""
     with db.get_connection() as conn:
         return pd.read_sql_query(
-            f"""SELECT e.id, coalesce(e.placa, '') AS placa, e.nombre, e.numero_interno,
-                       CASE WHEN {prestado_sql} THEN 'Prestado' ELSE 'Disponible' END AS estado
+            f"""SELECT e.id, coalesce(e.placa, '') AS placa, e.nombre,
+                       coalesce(e.numero_interno, '') AS numero_interno,
+                       e.consumible,
+                       CASE
+                           WHEN e.consumible=1 THEN 'Consumible'
+                           WHEN {prestado_sql} THEN 'Prestado'
+                           ELSE 'Disponible'
+                       END AS estado
                   FROM equipos_pasillo e
                  WHERE e.activo=1 {condicion}
-                 ORDER BY e.nombre COLLATE NOCASE, e.placa""",
+                 ORDER BY e.consumible, e.nombre COLLATE NOCASE, e.placa""",
             conn,
         )
 
@@ -177,7 +185,7 @@ def obtener_tecnicos():
 
 @st.cache_data(ttl=CACHE_TTL_SEGUNDOS, show_spinner=False)
 def obtener_solicitante(codigo):
-    codigo = str(codigo or "").strip()
+    codigo = est.resolver_codigo(codigo)
     if not codigo:
         return None
     with db.get_connection() as conn:
@@ -192,7 +200,7 @@ def obtener_solicitante(codigo):
 
 @st.cache_data(ttl=CACHE_TTL_SEGUNDOS, show_spinner=False)
 def obtener_alertas_bloqueo(codigo):
-    codigo = str(codigo or "").strip()
+    codigo = est.resolver_codigo(codigo)
     if not codigo:
         return []
     with db.get_connection() as conn:
@@ -202,9 +210,17 @@ def obtener_alertas_bloqueo(codigo):
             (codigo,),
         ).fetchall()
         prestamos = conn.execute(
-            """SELECT motivo, fecha_incidente, retraso_minutos FROM multas_prestamos
-               WHERE codigo_estudiante=? AND estado='PENDIENTE'
-               ORDER BY fecha_incidente DESC""",
+            """SELECT mp.motivo, mp.fecha_incidente, mp.retraso_minutos
+               FROM multas_prestamos mp
+               WHERE mp.codigo_estudiante=? AND mp.estado='PENDIENTE'
+                 AND EXISTS (
+                    SELECT 1
+                    FROM multas m
+                    WHERE m.codigo_estudiante=mp.codigo_estudiante
+                      AND m.pagado='NO'
+                      AND m.observaciones LIKE '%' || 'Prestamo de pasillo #' || mp.prestamo_id || '%'
+                 )
+               ORDER BY mp.fecha_incidente DESC""",
             (codigo,),
         ).fetchall()
     alertas = [f"{motivo} — {fecha}" for motivo, fecha in generales]
@@ -236,6 +252,25 @@ def _crear_multa_prestamo(conn, prestamo_id, codigo, tipo, motivo, incidente,
             """UPDATE multas_prestamos SET monto_pago=?, tecnico_responsable=coalesce(?, tecnico_responsable)
                WHERE prestamo_id=? AND tipo=? AND fecha_limite_referencia=?""",
             (float(monto_pago), tecnico, prestamo_id, tipo, referencia),
+        )
+    if cursor.rowcount:
+        sancion = (
+            f"Retraso FPGA de {_formatear_retraso(retraso_minutos)}"
+            if tipo == "FPGA_RETRASO"
+            else f"Retraso de prestamo de {_formatear_retraso(retraso_minutos)}"
+        )
+        conn.execute(
+            """INSERT INTO multas
+               (codigo_estudiante, fecha_multa, motivo, sancion, tecnico_asigna, pagado, observaciones)
+               VALUES (?, ?, ?, ?, ?, 'NO', ?)""",
+            (
+                codigo,
+                incidente.split(" ", 1)[0],
+                motivo,
+                sancion,
+                tecnico or "",
+                f"Prestamo de pasillo #{prestamo_id}. Limite: {referencia}",
+            ),
         )
     return cursor.rowcount
 
@@ -271,7 +306,7 @@ def _registrar_incumplimientos(conn, prestamo, momento, monto_pago=0, tecnico=No
 
 
 def crear_prestamo(equipos_ids, solicitante, tecnico_entrega, observaciones_salida=""):
-    solicitante = _texto(solicitante, "Solicitante")
+    solicitante = _texto(est.resolver_codigo(solicitante), "Solicitante")
     tecnico_entrega = _texto(tecnico_entrega, "Técnico responsable")
     ids = list(dict.fromkeys(int(equipo_id) for equipo_id in equipos_ids))
     if not ids:
@@ -284,11 +319,11 @@ def crear_prestamo(equipos_ids, solicitante, tecnico_entrega, observaciones_sali
         disponibles = conn.execute(
             f"""SELECT e.id, e.nombre FROM equipos_pasillo e
                  WHERE e.activo=1 AND e.id IN ({marcadores})
-                   AND NOT EXISTS (
+                   AND (e.consumible=1 OR NOT EXISTS (
                        SELECT 1 FROM prestamos_pasillo_equipos pe
                        JOIN prestamos_pasillo p ON p.id=pe.prestamo_id
                        WHERE pe.equipo_id=e.id AND p.estado='PRESTADO'
-                   )""",
+                   ))""",
             ids,
         ).fetchall()
         if {fila[0] for fila in disponibles} != set(ids):
@@ -431,7 +466,7 @@ def obtener_prestamos(estado=None):
 @st.cache_data(ttl=CACHE_TTL_SEGUNDOS, show_spinner=False)
 def obtener_prestamos_activos_codigo(codigo):
     """Obtiene solo las salidas pendientes asociadas al código consultado."""
-    codigo = str(codigo or "").strip()
+    codigo = est.resolver_codigo(codigo)
     if not codigo:
         return pd.DataFrame()
     with db.get_connection() as conn:

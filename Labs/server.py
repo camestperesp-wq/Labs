@@ -1,5 +1,6 @@
 """Entrada obligatoria: python -m streamlit run server.py"""
 import asyncio
+import base64
 import hmac
 from html import escape
 import secrets
@@ -18,17 +19,30 @@ from starlette.concurrency import run_in_threadpool
 import auth
 
 
+def logo_login_data_uri():
+    ruta = Path(__file__).with_name("assets") / "escudo_ud.png"
+    if not ruta.exists():
+        return ""
+    return "data:image/png;base64," + base64.b64encode(ruta.read_bytes()).decode("ascii")
+
+
 def form_page(action, csrf, message=""):
     csrf = escape(csrf, quote=True)
+    logo = logo_login_data_uri()
+    marca_agua = (
+        f"background-image:linear-gradient(rgba(245,246,247,.90),rgba(245,246,247,.90)),url('{logo}');"
+        "background-size:auto,132px;background-repeat:repeat;background-position:0 0,0 0;"
+        if logo else ""
+    )
     fields = '''<label>Usuario<input name="username" autocomplete="username" required maxlength="150"></label>
     <label>Contraseña<input type="password" name="password" autocomplete="current-password" required maxlength="1024"></label>''' if action == "login" else ""
     label = "Ingresar" if action == "login" else "Cerrar sesión"
     return HTMLResponse(f'''<!doctype html><html lang="es"><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1"><title>{label} · UD</title>
-    <style>body{{font:16px 'Segoe UI',sans-serif;background:#f5f6f7;color:#20252a;margin:0}}
-    main{{max-width:360px;margin:10vh auto;padding:32px;background:white;border-top:5px solid #941419}}
-    h1{{font-size:24px}}label,input{{display:block}}input{{box-sizing:border-box;width:100%;padding:12px;margin:8px 0 20px;border:1px solid #aaa;border-radius:4px}}
-    button{{background:#941419;color:white;padding:12px 24px;border:0;border-radius:4px;font-size:16px}}</style>
+    <style>body{{font:16px Inter,Roboto,'Segoe UI',system-ui,sans-serif;background:#f5f6f7;color:#20252a;margin:0;min-height:100vh;{marca_agua}}}
+    main{{max-width:390px;margin:10vh auto;padding:34px;background:rgba(255,255,255,.96);border-top:5px solid #941419;border-radius:14px;box-shadow:0 22px 60px rgba(24,33,44,.16)}}
+    p:first-child{{color:#941419;font-weight:800;text-transform:uppercase;font-size:12px;letter-spacing:.08em}}h1{{font-size:27px;margin:.2rem 0 1rem;font-weight:900}}label,input{{display:block}}label{{font-weight:700;color:#731116}}input{{box-sizing:border-box;width:100%;padding:12px 13px;margin:8px 0 20px;border:1px solid #ccd3dc;border-radius:8px;background:#fff}}
+    input:focus{{outline:2px solid rgba(148,20,25,.18);border-color:#941419}}button{{background:#941419;color:white;padding:12px 24px;border:0;border-radius:8px;font-size:16px;font-weight:800;box-shadow:0 8px 20px rgba(148,20,25,.22)}}</style>
     <main><p>Universidad Distrital</p><h1>Gestión de laboratorios</h1><p>{message}</p>
     <form method="post" action="/{action}"><input type="hidden" name="csrf" value="{csrf}">{fields}<button>{label}</button></form></main></html>''', headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"})
 

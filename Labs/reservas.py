@@ -1,6 +1,7 @@
 # reservas.py
 
 import database as db
+import estudiantes as est
 from utils import generar_multa
 from constants import LABORATORIOS, LABS_NAMES
 import streamlit as st
@@ -72,6 +73,7 @@ def aplicar_intercambios_busqueda(df):
 # ============================================================
 
 def verificar_reserva_existente(codigo, fecha, hora, laboratorio=None):
+    codigo = est.resolver_codigo(codigo)
     if laboratorio:
         query = """
             SELECT COUNT(*) FROM reservas 
@@ -96,6 +98,8 @@ def guardar_reserva(data):
     """
     Guarda una reserva individual (estudiante).
     """
+    data = list(data)
+    data[4] = est.resolver_codigo(data[4])
     codigo = data[4]
     fecha = data[0]
     hora = data[1]
@@ -294,6 +298,8 @@ def buscar_reservas_persona(termino):
     """
     Busca reservas de una persona por su código (parcial).
     """
+    termino = est.normalizar_entrada_busqueda(termino)
+    codigo = est.resolver_codigo(termino)
     df = db.fetch_df("""SELECT
                             r.id, r.fecha, r.hora, r.laboratorio, r.banco,
                             r.codigo, r.nombres, r.proyecto, r.asiste,
@@ -304,9 +310,9 @@ def buscar_reservas_persona(termino):
                                 AND upper(trim(coalesce(m.pagado, 'NO'))) = 'NO'
                             ) AS multas_activas
                        FROM reservas r
-                       WHERE r.codigo LIKE ? AND r.activo=1
+                       WHERE (r.codigo LIKE ? OR r.codigo=?) AND r.activo=1
                        ORDER BY r.fecha DESC, r.hora ASC""",
-                    (f'%{termino}%',))
+                    (f'%{termino}%', codigo))
     return aplicar_intercambios_busqueda(df)
 
 def get_reporte_completo(fecha_desde, fecha_hasta):
@@ -342,6 +348,7 @@ def obtener_multas_activas_estudiante(codigo):
     """
     Retorna un texto con las multas activas de un estudiante (desde tabla multas).
     """
+    codigo = est.resolver_codigo(codigo)
     query = """
         SELECT motivo, fecha_multa, sancion 
         FROM multas 
@@ -404,7 +411,7 @@ def actualizar_reservas_desde_editor(cambios):
 
     for cambio in cambios:
         id_res = int(cambio["id"])
-        nuevo_codigo = "" if cambio["codigo"] is None else str(cambio["codigo"]).strip()
+        nuevo_codigo = est.resolver_codigo(cambio["codigo"])
         nuevo_banco = int(cambio["banco"])
         actual = actuales_por_id.get(id_res)
 

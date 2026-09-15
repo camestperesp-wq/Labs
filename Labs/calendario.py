@@ -1026,14 +1026,14 @@ def _build_contexto_calendario(dia_seleccionado, fecha_str):
         if es_profesor_no:
             slot["profesor_no"] = True
 
-        if codigo == "PROFESOR" and asistencia:
+        if codigo == "PROFESOR":
             profesor_actual = slot["profesor"]
             if profesor_actual is None or reserva_id > profesor_actual["id"]:
                 slot["profesor"] = {
                     "id": reserva_id,
                     "nombre": nombres or "",
                     "asignatura": proyecto or "",
-                    "estado": asistencia,
+                    "estado": asistencia or "Pendiente",
                     "es_prestamo_docente": str(observaciones or "").startswith("Reserva de profesor:"),
                 }
 
@@ -1101,7 +1101,6 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
             """SELECT nombres, proyecto, asiste, observaciones FROM reservas
             WHERE laboratorio=? AND fecha=? AND hora=?
             AND codigo='PROFESOR' AND activo=1
-            AND asiste IS NOT NULL AND asiste != ''
             ORDER BY id DESC
             LIMIT 1""",
             (lab, fecha_str, hora),
@@ -1128,7 +1127,7 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
 
     disponibles = total - ocupados
 
-    tiene_profesor = bool(estado_profesor)
+    tiene_profesor = bool(profesor_nombre or estado_profesor)
     tiene_asignatura = bool(horario and horario["asignatura"])
     es_adicional = bool(horario and _es_bloque_reservable(horario.get("asignatura"), horario.get("carrera")))
 
@@ -1140,6 +1139,10 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
         estado = "profesor_no"
         etiqueta = f"DOCENTE NO ASISTIO\nHabilitado\n{ocupados}/{total}"
         detalle = f"(No asistió) | {profesor_asignatura} | {profesor_nombre} | {ocupados}/{total}"
+    elif tiene_profesor:
+        estado = "profesor_pendiente"
+        etiqueta = f"DOCENTE RESERVADO\n{profesor_asignatura or 'Reserva docente'}"
+        detalle = f"Reserva docente | {profesor_asignatura or 'Sin motivo'} | {profesor_nombre or 'Sin nombre'}"
     elif es_adicional:
         nombre_bloque = horario.get("asignatura") or "Adicional"
         es_practica_libre = horario.get("carrera") == "Práctica Libre" or "práctica libre" in nombre_bloque.lower() or "practica libre" in nombre_bloque.lower()
@@ -1150,6 +1153,10 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
         else:
             etiqueta = f"{nombre_bloque}\n{ocupados}/{total}"
             detalle = f"{nombre_bloque} libre | {ocupados}/{total}"
+        docente_horario = (horario.get("profesor") or "").strip()
+        if docente_horario:
+            etiqueta += "\n" + _nombre_en_celda("Docente", docente_horario)
+            detalle += f" | Docente: {docente_horario}"
         if es_practica_libre:
             monitor = horario.get("monitor") or "Sin monitor asignado"
             etiqueta += "\n" + _nombre_en_celda("Monitor", monitor)
@@ -1201,7 +1208,7 @@ def _datos_celda_seleccionada(sel_lab, sel_fecha, sel_hora, estado):
             b for b in range(1, estado["total"] + 1)
             if b not in get_bancos_ocupados(sel_lab, sel_fecha, sel_hora)
         ],
-        "es_asignatura": estado["estado"] in ("asignatura", "adicional", "practica_libre", "profesor_si", "profesor_no"),
+        "es_asignatura": estado["estado"] in ("asignatura", "adicional", "practica_libre", "profesor_si", "profesor_no", "profesor_pendiente"),
         "asignatura_info": estado["horario"],
         "es_profesor_asistio": estado["estado"] == "profesor_si",
         "es_profesor_no_asistio": estado["estado"] == "profesor_no",
@@ -1236,6 +1243,13 @@ def _estilo_celda_reserva(estado):
             "border": "#991B1B",
             "shadow": "inset 0 0 0 3px rgba(255,255,255,0.35), 0 8px 18px rgba(220,38,38,0.30)",
             "weight": "900",
+        },
+        "profesor_pendiente": {
+            "background": "#E8C766",
+            "color": "#2E1A00",
+            "border": "#C5A13A",
+            "shadow": "none",
+            "weight": "800",
         },
         "adicional": {
             "background": "#E8C766",
@@ -1299,7 +1313,7 @@ def _inyectar_estilo_boton_celda(marker_id, estilo):
                 border-radius: 4px !important;
                 padding: 0.55rem !important;
                 white-space: pre-wrap !important;
-                line-height: 1.16 !important;
+                line-height: 1.2 !important;
                 text-align: center !important;
                 font-size: 0.76rem !important;
                 font-weight: {estilo["weight"]} !important;
@@ -1313,16 +1327,16 @@ def _inyectar_estilo_boton_celda(marker_id, estilo):
             div[data-testid="stElementContainer"]:has(style#{marker_id}) + div[data-testid="stElementContainer"] button p,
             div[data-testid="stElementContainer"]:has(style#{marker_id}) + div[data-testid="stElementContainer"] button div {{
                 white-space: pre-wrap !important;
-                line-height: 1.16 !important;
+                line-height: 1.2 !important;
                 overflow-wrap: anywhere !important;
                 word-break: break-word !important;
                 margin: 0 !important;
                 max-height: none !important;
             }}
             div[data-testid="stElementContainer"]:has(style#{marker_id}) + div[data-testid="stElementContainer"] button em {{
-                font-size: 0.64rem !important;
+                font-size: 0.68rem !important;
                 font-style: normal !important;
-                font-weight: 400 !important;
+                font-weight: 500 !important;
             }}
             div[data-testid="stElementContainer"]:has(style#{marker_id}) + div[data-testid="stElementContainer"] button:hover {{
                 background: {estilo["background"]} !important;

@@ -89,14 +89,20 @@ def logout(token):
 
 def require_login():
     import streamlit as st
+
     user = session(st.context.cookies.get(COOKIE, ""))
     if not user:
-        st.title("Laboratorios · Universidad Distrital")
-        st.info("Inicie sesión para acceder al sistema.")
-        st.link_button("Iniciar sesión", "/login")
+        st.markdown(
+            """
+            <meta http-equiv="refresh" content="0; url=/login">
+            <script>window.location.replace('/login');</script>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.title("Laboratorios ? Universidad Distrital")
+        st.info("La sesi?n no est? activa. Redirigiendo al inicio de sesi?n...")
+        st.link_button("Iniciar sesi?n", "/login")
         st.stop()
-    st.caption(f"Sesión: {user[0]}")
-    st.link_button("Cerrar sesión", "/logout", icon=":material/menu:")
     return user[0]
 
 

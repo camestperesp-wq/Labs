@@ -7,6 +7,7 @@ import streamlit as st
 
 from constants import es_tecnico_valido
 from exportaciones import crear_excel_institucional
+import estudiantes as est
 import prestamos_pasillos as prestamos
 
 
@@ -46,13 +47,25 @@ def _mostrar_inventario():
         with st.container(border=True):
             st.markdown("##### Registrar nuevo equipo")
             with st.form("pasillos_registrar_equipo", clear_on_submit=True):
-                placa = st.text_input("Número de placa", help="Opcional: puede quedar en blanco.")
+                tipo_item = st.radio(
+                    "Tipo de item",
+                    ["Unico", "Consumible"],
+                    horizontal=True,
+                    help="Consumible: cables, adaptadores u otros elementos de cantidad libre. No exige placa ni numero interno.",
+                )
+                consumible = tipo_item == "Consumible"
                 nombre = st.text_input("Nombre del equipo *")
-                numero_interno = st.text_input("Número interno *")
-                registrar = st.form_submit_button("Registrar equipo", use_container_width=True)
+                if consumible:
+                    placa = ""
+                    numero_interno = ""
+                    st.caption("Los consumibles solo necesitan nombre y quedan disponibles como cantidad libre.")
+                else:
+                    placa = st.text_input("Numero de placa", help="Opcional para items unicos.")
+                    numero_interno = st.text_input("Numero interno *")
+                registrar = st.form_submit_button("Registrar item", use_container_width=True)
             if registrar:
                 try:
-                    prestamos.registrar_equipo(placa, nombre, numero_interno)
+                    prestamos.registrar_equipo(placa, nombre, numero_interno, consumible=consumible)
                     st.session_state.pasillos_flash_inventario = "Equipo registrado correctamente."
                     st.rerun(scope="fragment")
                 except ValueError as error:
@@ -61,13 +74,19 @@ def _mostrar_inventario():
     if inventario.empty:
         st.info("Aún no hay equipos registrados.")
     else:
+        inventario_vista = inventario.rename(columns={
+            "placa": "Numero de placa",
+            "nombre": "Equipo",
+            "numero_interno": "Numero interno",
+            "consumible": "Consumible",
+            "estado": "Estado",
+        })
+        if "Consumible" in inventario_vista.columns:
+            inventario_vista["Consumible"] = inventario_vista["Consumible"].map(
+                lambda valor: "Si" if int(valor or 0) == 1 else "No"
+            )
         st.dataframe(
-            inventario.rename(columns={
-                "placa": "Número de placa",
-                "nombre": "Equipo",
-                "numero_interno": "Número interno",
-                "estado": "Estado",
-            })[["Número de placa", "Equipo", "Número interno", "Estado"]],
+            inventario_vista[["Numero de placa", "Equipo", "Numero interno", "Consumible", "Estado"]],
             hide_index=True,
             use_container_width=True,
         )
@@ -111,19 +130,23 @@ def _mostrar_nuevo_prestamo():
         st.info("No hay equipos disponibles para prestar.")
         return
 
-    etiquetas = {
-        int(fila["id"]): (
-            f"{fila['nombre']} · "
-            f"{'Placa ' + fila['placa'] + ' · ' if fila['placa'] else ''}"
-            f"Interno {fila['numero_interno']}"
-        )
-        for _, fila in disponibles.iterrows()
-    }
+    etiquetas = {}
+    for _, fila in disponibles.iterrows():
+        equipo_id = int(fila["id"])
+        if int(fila.get("consumible", 0) or 0) == 1:
+            etiquetas[equipo_id] = f"{fila['nombre']} - Consumible - cantidad libre"
+        else:
+            etiquetas[equipo_id] = (
+                f"{fila['nombre']} - "
+                f"{'Placa ' + fila['placa'] + ' - ' if fila['placa'] else ''}"
+                f"Interno {fila['numero_interno']}"
+            )
     codigo_solicitante = st.text_input(
-        "Código del solicitante *",
+        "Codigo, cedula o QR del solicitante *",
         key=codigo_key,
-        placeholder="Ingresa el código institucional",
-    ).strip()
+        placeholder='Ingresa codigo, cedula o {"nid":1011090672}',
+    )
+    codigo_solicitante = est.normalizar_entrada_busqueda(codigo_solicitante)
     solicitante = prestamos.obtener_solicitante(codigo_solicitante)
     if codigo_solicitante and solicitante:
         st.markdown(f"**Solicitante:** {solicitante['nombres']}")

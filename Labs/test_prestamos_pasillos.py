@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 import database as db
+import multas
 import prestamos_pasillos as prestamos
 
 
@@ -41,6 +42,19 @@ class PrestamosPasillosTest(unittest.TestCase):
         self.assertEqual(devuelto["estado"], "DEVUELTO")
         self.assertTrue(devuelto["fecha_retorno"])
 
+
+    def test_consumible_no_exige_identificadores_y_sigue_disponible(self):
+        prestamos.registrar_equipo("", "Cable HDMI", "", consumible=True)
+        equipo_id = int(prestamos.obtener_equipos(True).iloc[0]["id"])
+
+        prestamos.crear_prestamo([equipo_id], "20249999", "Camilo P?rez")
+        disponibles = prestamos.listar_equipos(solo_disponibles=True)
+        self.assertIn(equipo_id, disponibles["id"].tolist())
+        self.assertEqual(disponibles.loc[disponibles["id"] == equipo_id, "estado"].iloc[0], "Consumible")
+
+        segundo_prestamo = prestamos.crear_prestamo([equipo_id], "20248888", "Camilo P?rez")
+        self.assertIsInstance(segundo_prestamo, int)
+
     def test_fpga_renovacion_tardia_genera_multa(self):
         prestamos.registrar_equipo("FP-1", "Kit FPGA Nexys", "FP-I-1")
         equipo_id = int(prestamos.obtener_equipos(True).iloc[0]["id"])
@@ -60,6 +74,13 @@ class PrestamosPasillosTest(unittest.TestCase):
         self.assertIn("No renovó a tiempo", multa[0])
         self.assertGreaterEqual(multa[1], 5)
         self.assertEqual(multa[2], 0)
+        multa_general = db.ejecutar(
+            "SELECT motivo, sancion, pagado FROM multas WHERE codigo_estudiante=?",
+            ("20249999",), fetch=True,
+        )[0]
+        self.assertIn("No renov", multa_general[0])
+        self.assertIn("Retraso FPGA", multa_general[1])
+        self.assertEqual(multa_general[2], "NO")
 
     def test_fpga_dentro_de_tolerancia_no_genera_multa(self):
         prestamos.registrar_equipo("FP-2", "FPGA Basys", "FP-I-2")
@@ -73,6 +94,47 @@ class PrestamosPasillosTest(unittest.TestCase):
             (prestamo_id,), fetch=True,
         )[0][0]
         self.assertEqual(multas, 0)
+
+    def test_eliminar_multa_fpga_cierra_alerta_prestamo(self):
+        prestamo_id = self._crear_fpga_vencida_con_multa("20243333")
+        multa_id = db.ejecutar(
+            "SELECT id FROM multas WHERE codigo_estudiante='20243333'",
+            fetch=True,
+        )[0][0]
+        self.assertTrue(prestamos.obtener_alertas_bloqueo("20243333"))
+        multas.eliminar_multa(multa_id)
+        self.assertFalse(prestamos.obtener_alertas_bloqueo("20243333"))
+        estado = db.ejecutar(
+            "SELECT estado FROM multas_prestamos WHERE prestamo_id=?",
+            (prestamo_id,), fetch=True,
+        )[0][0]
+        self.assertEqual(estado, "PAGADA")
+
+    def test_pagar_multa_fpga_cierra_alerta_prestamo(self):
+        prestamo_id = self._crear_fpga_vencida_con_multa("20244444")
+        multa_id = db.ejecutar(
+            "SELECT id FROM multas WHERE codigo_estudiante='20244444'",
+            fetch=True,
+        )[0][0]
+        multas.pagar_multa(multa_id, "Camilo PÃ©rez")
+        self.assertFalse(prestamos.obtener_alertas_bloqueo("20244444"))
+        estado = db.ejecutar(
+            "SELECT estado FROM multas_prestamos WHERE prestamo_id=?",
+            (prestamo_id,), fetch=True,
+        )[0][0]
+        self.assertEqual(estado, "PAGADA")
+
+    def _crear_fpga_vencida_con_multa(self, codigo):
+        prestamos.registrar_equipo("", f"FPGA {codigo}", f"FP-{codigo}")
+        equipo_id = int(prestamos.obtener_equipos(True).iloc[0]["id"])
+        prestamo_id = prestamos.crear_prestamo([equipo_id], codigo, "Camilo PÃ©rez")
+        limite_vencido = (datetime.now() - timedelta(minutes=25)).isoformat(sep=" ", timespec="seconds")
+        db.ejecutar("UPDATE prestamos_pasillo SET limite_fpga=? WHERE id=?", (limite_vencido, prestamo_id))
+        prestamos.obtener_prestamos.clear()
+        prestamos.renovar_prestamo_fpga(
+            prestamo_id, "Camilo PÃ©rez", detalle_multa="Retraso documentado"
+        )
+        return prestamo_id
 
     def test_no_elimina_equipo_prestado(self):
         prestamos.registrar_equipo("E-1", "Osciloscopio", "E-I-1")

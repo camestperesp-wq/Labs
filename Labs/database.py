@@ -151,8 +151,13 @@ def init_db():
             codigo TEXT PRIMARY KEY,
             nombres TEXT,
             proyecto TEXT,
-            multas TEXT
+            multas TEXT,
+            documento TEXT
         )""")
+        columnas_estudiantes = {fila[1] for fila in c.execute("PRAGMA table_info(estudiantes)")}
+        for columna in ("nombres", "proyecto", "multas", "documento"):
+            if columna not in columnas_estudiantes:
+                c.execute(f"ALTER TABLE estudiantes ADD COLUMN {columna} TEXT")
 
         c.execute("""CREATE TABLE IF NOT EXISTS horario_fijo (
             dia_semana TEXT,
@@ -195,15 +200,10 @@ def init_db():
             if columna not in columnas_multas:
                 c.execute(f"ALTER TABLE multas ADD COLUMN {columna} TEXT")
 
-        # No elimina reportes históricos: impide nuevas colisiones por código/día.
+        # Un estudiante puede recibir varias multas el mismo día.
+        # El importador identifica los reportes por sus detalles al reimportar.
         for operacion in ("INSERT", "UPDATE"):
-            excluir = "AND id != OLD.id" if operacion == "UPDATE" else ""
-            c.execute(f"""CREATE TRIGGER IF NOT EXISTS multas_clave_{operacion.lower()}
-                BEFORE {operacion} ON multas
-                WHEN EXISTS (SELECT 1 FROM multas
-                    WHERE trim(codigo_estudiante)=trim(NEW.codigo_estudiante)
-                    AND substr(fecha_multa,1,10)=substr(NEW.fecha_multa,1,10) {excluir})
-                BEGIN SELECT RAISE(ABORT, 'Ya existe una multa para ese código y fecha'); END""")
+            c.execute(f"DROP TRIGGER IF EXISTS multas_clave_{operacion.lower()}")
 
         c.execute("CREATE INDEX IF NOT EXISTS idx_reservas_fecha_lab_hora_activo ON reservas(fecha, laboratorio, hora, activo)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_reservas_codigo_fecha_activo ON reservas(codigo, fecha, activo)")
@@ -212,6 +212,7 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_multas_codigo_pagado ON multas(codigo_estudiante, pagado)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_multas_pagado_codigo ON multas(pagado, codigo_estudiante)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_multas_fecha ON multas(fecha_multa)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_estudiantes_documento ON estudiantes(documento)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_horario_dia_hora_lab ON horario_fijo(dia_semana, hora, laboratorio)")
 
         # Inventario y préstamos de equipos de pasillo. La cabecera conserva los
@@ -221,14 +222,19 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             placa TEXT UNIQUE,
             nombre TEXT NOT NULL,
-            numero_interno TEXT NOT NULL UNIQUE,
+            numero_interno TEXT UNIQUE,
+            consumible INTEGER NOT NULL DEFAULT 0 CHECK(consumible IN (0, 1)),
             activo INTEGER NOT NULL DEFAULT 1 CHECK(activo IN (0, 1)),
             creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""")
         columnas_equipos = {fila[1]: fila for fila in c.execute("PRAGMA table_info(equipos_pasillo)")}
-        if columnas_equipos.get("placa", (None, None, None, 0))[3]:
-            # Migración de instalaciones que crearon placa como NOT NULL.
-            # SQLite requiere reconstruir la tabla para retirar la restricción.
+        requiere_migracion_equipos = (
+            columnas_equipos.get("placa", (None, None, None, 0))[3]
+            or columnas_equipos.get("numero_interno", (None, None, None, 0))[3]
+            or "consumible" not in columnas_equipos
+        )
+        if requiere_migracion_equipos:
+            # Permite consumibles sin placa ni n?mero interno y conserva equipos existentes.
             conn.commit()
             conn.execute("PRAGMA foreign_keys = OFF")
             try:
@@ -237,13 +243,21 @@ def init_db():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     placa TEXT UNIQUE,
                     nombre TEXT NOT NULL,
-                    numero_interno TEXT NOT NULL UNIQUE,
+                    numero_interno TEXT UNIQUE,
+                    consumible INTEGER NOT NULL DEFAULT 0 CHECK(consumible IN (0, 1)),
                     activo INTEGER NOT NULL DEFAULT 1 CHECK(activo IN (0, 1)),
                     creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )""")
-                conn.execute("""INSERT INTO equipos_pasillo_nueva
-                    (id, placa, nombre, numero_interno, activo, creado_en)
-                    SELECT id, NULLIF(trim(placa), ''), nombre, numero_interno, activo, creado_en
+                consumible_expr = "consumible" if "consumible" in columnas_equipos else "0"
+                conn.execute(f"""INSERT INTO equipos_pasillo_nueva
+                    (id, placa, nombre, numero_interno, consumible, activo, creado_en)
+                    SELECT id,
+                           NULLIF(trim(placa), ''),
+                           nombre,
+                           NULLIF(trim(numero_interno), ''),
+                           CASE WHEN coalesce({consumible_expr}, 0)=1 THEN 1 ELSE 0 END,
+                           activo,
+                           creado_en
                     FROM equipos_pasillo""")
                 conn.execute("DROP TABLE equipos_pasillo")
                 conn.execute("ALTER TABLE equipos_pasillo_nueva RENAME TO equipos_pasillo")

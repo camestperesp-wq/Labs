@@ -1,5 +1,6 @@
 # app.py
 from datetime import datetime, timedelta
+from html import escape
 from pathlib import Path
 
 import streamlit as st
@@ -98,7 +99,7 @@ def opcion_dia_actual(fechas_semana, opciones_dias):
 
 st.set_page_config(page_title="LABS", layout="wide")
 from auth import require_login
-require_login()
+usuario_actual = require_login()
 inicializar_estado()
 db.init_db()
 
@@ -109,11 +110,15 @@ st.markdown("""
             --labs-red-dark: #731116;
             --labs-yellow: #f2c230;
             --labs-yellow-soft: #fff9e6;
-            --labs-bg: #f7f7f8;
+            --labs-bg: #f4f6f8;
             --labs-surface: #ffffff;
-            --labs-border: #e2d8cb;
+            --labs-border: #dfe4ea;
             --labs-text: #1e2329;
             --labs-muted: #6b7280;
+        }
+
+        html, body, .stApp, [class*="css"] {
+            font-family: Inter, Roboto, Montserrat, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
         }
 
         .stApp {
@@ -381,6 +386,74 @@ st.markdown("""
             min-width: 330px;
         }
 
+        .labs-user-menu {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+            line-height: 1;
+        }
+
+        .labs-user-menu summary {
+            width: 48px;
+            height: 48px;
+            border: 1px solid #d9dde2;
+            border-radius: 14px;
+            display: inline-grid;
+            place-items: center;
+            background: #ffffff;
+            color: var(--labs-red-dark);
+            font-size: 1.35rem;
+            font-weight: 900;
+            cursor: pointer;
+            list-style: none;
+            box-shadow: 0 8px 22px rgba(24,33,44,0.10);
+            padding: 0;
+            user-select: none;
+        }
+
+        .labs-user-menu[open] summary {
+            border-color: var(--labs-red);
+            box-shadow: 0 10px 26px rgba(148,20,25,0.18);
+        }
+
+        .labs-user-menu summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .labs-user-menu-panel {
+            position: absolute;
+            right: 0;
+            top: calc(100% + 0.55rem);
+            width: 178px;
+            padding: 0.45rem;
+            border: 1px solid var(--labs-border);
+            border-radius: 14px;
+            background: #ffffff;
+            box-shadow: 0 18px 42px rgba(24,33,44,0.18);
+            z-index: 1000;
+        }
+
+        .labs-user-menu-panel a {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 38px;
+            padding: 0.65rem 0.75rem;
+            border-radius: 10px;
+            color: var(--labs-red-dark);
+            text-decoration: none;
+            font-family: Inter, Roboto, Montserrat, "Segoe UI", system-ui, sans-serif;
+            font-size: 0.92rem;
+            font-weight: 800;
+            letter-spacing: 0.01em;
+        }
+
+        .labs-user-menu-panel a:hover {
+            background: #fff4f4;
+        }
+
         .labs-brand-logo {
             width: 164px;
             height: 88px;
@@ -461,7 +534,7 @@ st.markdown("""
 
         .block-container {
             max-width: 1500px;
-            padding-top: 0.35rem !important;
+            padding-top: 0 !important;
             padding-left: 2.35rem !important;
             padding-right: 2.35rem !important;
             padding-bottom: 1rem !important;
@@ -499,16 +572,21 @@ st.markdown("""
         }
 
         .labs-hero {
-            margin: 0 calc(50% - 50vw) 0 calc(50% - 50vw) !important;
-            padding: 0.55rem max(2.35rem, calc((100vw - 1500px) / 2 + 2.35rem)) 0.5rem max(2.35rem, calc((100vw - 1500px) / 2 + 2.35rem)) !important;
+            margin: -0.35rem calc(50% - 50vw) 0 calc(50% - 50vw) !important;
+            padding: 0.72rem max(2.35rem, calc((100vw - 1500px) / 2 + 2.35rem)) 0.62rem max(2.35rem, calc((100vw - 1500px) / 2 + 2.35rem)) !important;
             border-radius: 0 !important;
             border: 0 !important;
             border-top: 0 !important;
             border-bottom: 1px solid var(--labs-line) !important;
-            background: var(--labs-surface) !important;
-            box-shadow: 0 8px 24px rgba(23, 32, 42, 0.04) !important;
+            background:
+                linear-gradient(90deg, rgba(143,23,32,0.055), rgba(255,255,255,0) 38%),
+                var(--labs-surface) !important;
+            box-shadow: 0 10px 28px rgba(23, 32, 42, 0.055) !important;
             grid-template-columns: minmax(0, 1fr) auto !important;
-            position: relative;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            backdrop-filter: blur(14px);
         }
 
         .labs-hero::after {
@@ -527,12 +605,13 @@ st.markdown("""
         }
 
         .labs-seal {
-            width: clamp(88px, 9vw, 128px) !important;
-            height: clamp(100px, 10vw, 144px) !important;
-            border-radius: 0 !important;
-            background: #ffffff !important;
-            border: 0 !important;
-            box-shadow: none !important;
+            width: clamp(74px, 7vw, 98px) !important;
+            height: clamp(78px, 7.5vw, 104px) !important;
+            border-radius: 16px !important;
+            background: rgba(255,255,255,0.82) !important;
+            border: 1px solid rgba(216,222,232,0.9) !important;
+            box-shadow: 0 12px 30px rgba(23,32,42,0.08) !important;
+            padding: 0.35rem !important;
         }
 
         .labs-hero-kicker {
@@ -555,22 +634,23 @@ st.markdown("""
         }
 
         .labs-hero h1 {
-            margin: 0.2rem 0 0.22rem 0 !important;
-            color: #101820 !important;
-            font-family: Georgia, Cambria, "Times New Roman", serif !important;
-            font-size: clamp(1.5rem, 2vw, 2.15rem) !important;
-            font-weight: 800 !important;
-            line-height: 1.02 !important;
-            text-shadow: none !important;
+            margin: 0.08rem 0 0.18rem 0 !important;
+            color: var(--labs-red-dark) !important;
+            font-family: Inter, Montserrat, "Segoe UI", system-ui, sans-serif !important;
+            font-size: clamp(1.85rem, 2.8vw, 3.05rem) !important;
+            font-weight: 900 !important;
+            line-height: 0.98 !important;
+            letter-spacing: -0.045em !important;
+            text-shadow: 0 1px 0 rgba(255,255,255,0.8) !important;
             -webkit-text-stroke: 0 !important;
         }
 
         .labs-hero p {
-            color: var(--labs-muted) !important;
-            font-size: 0.88rem !important;
-            line-height: 1.25 !important;
+            color: #475467 !important;
+            font-size: 0.94rem !important;
+            line-height: 1.35 !important;
             margin: 0.12rem 0 !important;
-            font-weight: 500 !important;
+            font-weight: 560 !important;
             text-shadow: none !important;
         }
 
@@ -956,6 +1036,39 @@ escudo_html = f'<img src="{escudo_src}" alt="Escudo Universidad Distrital">' if 
 labs_logo_html = f'<img src="{labs_src}" alt="Laboratorios de Ingenieria">' if labs_src else "LABS"
 facultad_logo_html = f'<img src="{facultad_src}" alt="Facultad de Ingenieria">' if facultad_src else "Ingenieria"
 fecha_panel = datetime.now().strftime("%d/%m/%Y")
+usuario_menu = escape(str(usuario_actual))
+if labs_src:
+    st.markdown(
+        f"""
+        <style>
+            .stApp::before {{
+                content: "";
+                position: fixed;
+                inset: 0;
+                pointer-events: none;
+                z-index: 0;
+                background-image: url('{labs_src}');
+                background-repeat: repeat;
+                background-size: 220px auto;
+                opacity: 0.1;
+                transform: rotate(-18deg) scale(1.22);
+                transform-origin: center;
+            }}
+            .stApp > * {{
+                position: relative;
+                z-index: 1;
+            }}
+            .block-container {{
+                background: rgba(255,255,255,0.68);
+                border: 1px solid rgba(216,222,232,0.72);
+                border-radius: 24px;
+                box-shadow: 0 22px 70px rgba(23,32,42,0.08);
+                margin-top: 0.85rem;
+            }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 st.markdown(
     f"""
@@ -989,6 +1102,12 @@ st.markdown(
                 <strong id="labs-live-clock">--:--</strong>
                 <span>Hora local</span>
             </div>
+            <details class="labs-user-menu">
+                <summary aria-label="Menu de usuario">☰</summary>
+                <div class="labs-user-menu-panel">
+                    <a href="/logout" target="_self">Cerrar sesi?n</a>
+                </div>
+            </details>
         </aside>
     </section>
     """,
@@ -1015,6 +1134,36 @@ st.components.v1.html(
             window.parent.clearInterval(window.parent.__labsClockTimer);
         }
         window.parent.__labsClockTimer = window.parent.setInterval(updateClock, 15000);
+
+        function normalizeScan(value) {
+            const text = String(value || "").trim();
+            if (!text) return text;
+            try {
+                const parsed = JSON.parse(text);
+                if (parsed && parsed.nid !== undefined) return String(parsed.nid).replace(/\\D/g, "");
+            } catch (error) {}
+            const match = text.match(/"nid"\\s*:\\s*"?(\\d+)"?/i);
+            return match ? match[1] : text;
+        }
+
+        if (window.parent.__labsScannerCleanup) {
+            window.parent.__labsScannerCleanup();
+        }
+        const onScanEnter = function (event) {
+            const target = event.target;
+            if (!target || target.tagName !== "INPUT") return;
+            if (event.key !== "Enter") return;
+            const clean = normalizeScan(target.value);
+            if (clean !== target.value) {
+                target.value = clean;
+                target.dispatchEvent(new Event("input", { bubbles: true }));
+                target.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+        };
+        doc.addEventListener("keydown", onScanEnter, true);
+        window.parent.__labsScannerCleanup = function () {
+            doc.removeEventListener("keydown", onScanEnter, true);
+        };
     })();
     </script>
     """,
@@ -1296,7 +1445,7 @@ with tab6:
     st.subheader("Gestión de Estudiantes")
 
     archivo = st.file_uploader(
-        "Sube CSV/Excel (codigo, nombres, proyecto, multas)",
+        "Sube CSV/Excel (codigo, nombres, proyecto, multas, documento/cedula)",
         type=["csv", "xlsx", "xls"],
         key="labs_archivo_estudiantes",
     )

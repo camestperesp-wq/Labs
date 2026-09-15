@@ -38,9 +38,22 @@ class ImportacionesTest(unittest.TestCase):
         self.row["PAGO"] = "SI"
         self.row["FECHACANCELACION"] = "2026-09-12"
         result = importar_multas_excel(excel([self.row, self.row]))
-        self.assertEqual(result, {"insertadas": 0, "actualizadas": 1, "repetidas": 1})
+        self.assertEqual(result, {"insertadas": 0, "actualizadas": 1, "repetidas": 1, "omitidas_sin_nombre": 0})
         self.assertEqual(db.ejecutar("SELECT codigo_estudiante,pagado,fecha_pago FROM multas", fetch=True),
                          [("00123", "SI", "2026-09-12")])
+
+    def test_formato_deudores_con_titulo_y_campos_vacios(self):
+        row = {("NOMBRES Y APELLIDOS" if k == "NOMBREDELESTUDIANTE" else k): v
+               for k, v in self.row.items()}
+        row["PAGO"] = None
+        output = io.BytesIO()
+        with pd.ExcelWriter(output) as writer:
+            pd.DataFrame({"Otro": [1]}).to_excel(writer, sheet_name="ADICIONALES", index=False)
+            pd.DataFrame([row]).to_excel(writer, sheet_name="DEUDORES", startrow=2, index=False)
+        self.assertEqual(importar_multas_excel(output)["insertadas"], 1)
+        self.assertEqual(db.ejecutar(
+            "SELECT correo_usuario,fecha_pago,pagado,observaciones FROM multas", fetch=True),
+            [("", None, "NO", "")])
 
     def test_error_no_importa_parcialmente(self):
         invalid = dict(self.row, CODIGO="999", FECHASANCION="ayer")
@@ -48,9 +61,59 @@ class ImportacionesTest(unittest.TestCase):
             importar_multas_excel(excel([self.row, invalid]))
         self.assertEqual(db.ejecutar("SELECT count(*) FROM multas", fetch=True)[0][0], 0)
 
+    def test_nombre_vacio_se_busca_por_codigo(self):
+        db.ejecutar("INSERT INTO estudiantes(codigo,nombres,proyecto) VALUES (?,?,?)",
+                    ("00123", "Ana registrada", ""))
+        result = importar_multas_excel(excel([dict(self.row, NOMBREDELESTUDIANTE=None)]))
+        self.assertEqual(result["insertadas"], 1)
+        self.assertEqual(db.ejecutar(
+            "SELECT e.nombres FROM multas m JOIN estudiantes e ON e.codigo=m.codigo_estudiante",
+            fetch=True), [("Ana registrada",)])
+
+    def test_nombre_desconocido_se_omite(self):
+        invalid = dict(self.row, CODIGO="999", NOMBREDELESTUDIANTE=None)
+        result = importar_multas_excel(excel([self.row, invalid]))
+        self.assertEqual(result["omitidas_sin_nombre"], 1)
+        self.assertEqual(db.ejecutar("SELECT codigo_estudiante FROM multas", fetch=True), [("00123",)])
+        self.assertEqual(db.ejecutar("SELECT codigo FROM estudiantes", fetch=True), [("00123",)])
+
+    def test_todas_sin_nombre_no_crea_registros(self):
+        result = importar_multas_excel(excel([dict(self.row, NOMBREDELESTUDIANTE=None)]))
+        self.assertEqual(result, {"insertadas": 0, "actualizadas": 0, "repetidas": 0, "omitidas_sin_nombre": 1})
+        self.assertEqual(db.ejecutar("SELECT count(*) FROM multas", fetch=True), [(0,)])
+        self.assertEqual(db.ejecutar("SELECT count(*) FROM estudiantes", fetch=True), [(0,)])
+
     def test_filas_contradictorias_rechazadas(self):
         with self.assertRaises(ValueError):
             importar_multas_excel(excel([self.row, dict(self.row, PAGO="SI")]))
+
+    def test_varias_multas_mismo_dia_y_reimportacion(self):
+        rows = [dict(self.row, DESCRIPCIONDELREPORTE="Entrega tarde"),
+                dict(self.row, DESCRIPCIONDELREPORTE="Equipo dañado")]
+        self.assertEqual(importar_multas_excel(excel(rows))["insertadas"], 2)
+        rows[0]["PAGO"] = "SI"
+        result = importar_multas_excel(excel(list(reversed(rows))))
+        self.assertEqual(result["insertadas"], 0)
+        self.assertEqual(result["actualizadas"], 2)
+        self.assertEqual(db.ejecutar("SELECT motivo,pagado FROM multas ORDER BY motivo", fetch=True),
+                         [("Entrega tarde", "SI"), ("Equipo dañado", "NO")])
+
+    def test_reimportacion_actualiza_duplicados_historicos_mismo_detalle(self):
+        db.ejecutar("INSERT INTO estudiantes(codigo,nombres,proyecto) VALUES (?,?,?)",
+                    ("00123", "Ana PÃ©rez", ""))
+        for _ in range(2):
+            db.ejecutar("""INSERT INTO multas(codigo_estudiante,fecha_multa,fecha_pago,motivo,sancion,
+                         tecnico_asigna,pagado,correo_usuario,observaciones)
+                         VALUES (?,?,?,?,?,?,?,?,?)""",
+                        ("00123", "2026-09-11", None, "Entrega tarde", "", "", "NO", "", ""))
+        result = importar_multas_excel(excel([dict(self.row, DESCRIPCIONDELREPORTE="Entrega tarde", PAGO="SI")]))
+        self.assertEqual(result["insertadas"], 0)
+        self.assertEqual(result["actualizadas"], 2)
+        self.assertEqual(db.ejecutar("SELECT pagado FROM multas ORDER BY id", fetch=True), [("SI",), ("SI",)])
+
+    def test_fecha_con_anio_fuera_de_rango_muestra_error_validado(self):
+        with self.assertRaisesRegex(ValueError, r"Fila 2: Fecha inv"):
+            importar_multas_excel(excel([dict(self.row, FECHASANCION="02/10/82025")]))
 
     def test_inventario_sin_placa_repetible(self):
         row = {"ID_Elemento": "INT-1", "Nombre": "Multímetro"}
@@ -128,7 +191,7 @@ class ImportacionesTest(unittest.TestCase):
         for contexto in (None, cal._build_contexto_calendario(dia, fecha)):
             estado = cal._obtener_estado_celda(dia, lab, fecha, hora, contexto)
             self.assertIn("Monitor Ana", estado["etiqueta"])
-            self.assertNotIn("Docente Luis", estado["etiqueta"])
+            self.assertIn("Docente Luis", estado["etiqueta"])
         db.ejecutar("""INSERT INTO reservas(fecha,hora,laboratorio,banco,codigo,nombres,proyecto,asiste,observaciones,activo)
             VALUES (?,?,?,0,'PROFESOR','Docente Luis','Circuitos','Si','Asistencia docente: Circuitos',1)""", (fecha,hora,lab))
         for contexto in (None, cal._build_contexto_calendario(dia, fecha)):
@@ -143,13 +206,23 @@ class ImportacionesTest(unittest.TestCase):
         importar_multas_excel(excel([dict(self.row, PAGO="SI")]))
         view = AppTest.from_string("from ui_components import mostrar_deudores\nmostrar_deudores()").run(timeout=20)
         self.assertFalse(view.exception)
-        view.date_input(key="multas_reporte_desde").set_value(date(2026,9,1))
-        view.date_input(key="multas_reporte_hasta").set_value(date(2026,9,10)).run()
+        view.date_input(key="multas_reporte_desde_v2").set_value(date(2026,9,1))
+        view.date_input(key="multas_reporte_hasta_v2").set_value(date(2026,9,10)).run()
         self.assertFalse(view.exception)
         self.assertEqual(next(m.value for m in view.metric if m.label == "Registros"), "0")
-        view.date_input(key="multas_reporte_hasta").set_value(date(2026,9,11)).run()
+        view.date_input(key="multas_reporte_hasta_v2").set_value(date(2026,9,11)).run()
         self.assertFalse(view.exception)
         self.assertEqual(next(m.value for m in view.metric if m.label == "Registros"), "1")
+
+    def test_busqueda_deudores_encuentra_codigo_solo_en_multas(self):
+        from streamlit.testing.v1 import AppTest
+        db.ejecutar("""INSERT INTO multas(codigo_estudiante,fecha_multa,motivo,sancion,tecnico_asigna,pagado)
+                    VALUES ('SIN-EST', '2024-03-01', 'Historica', '', '', 'SI')""")
+        view = AppTest.from_string("from ui_components import mostrar_deudores\nmostrar_deudores()").run(timeout=20)
+        view.text_input(key="deudor_search").set_value("SIN-EST").run(timeout=20)
+        self.assertFalse(view.exception)
+        self.assertTrue(any("Sin nombre registrado" in item.value for item in view.markdown))
+        self.assertTrue(any("Historica" in item.value for item in view.markdown))
 
     def test_practica_conserva_nombre_y_docente(self):
         import horario_fijo as hf
@@ -158,6 +231,24 @@ class ImportacionesTest(unittest.TestCase):
         stored = hf.get_horario_celda("Lunes", "08:00-10:00", "Laboratorio")
         self.assertEqual(stored["asignatura"], "Medición de voltaje")
         self.assertEqual(stored["profesor"], "Ana Pérez")
+
+
+    def test_cargar_matriculados_periodo_actual_y_buscar_por_documento_qr(self):
+        import estudiantes as est
+        import reservas as res
+        archivo = io.BytesIO()
+        archivo.name = "MatriculadosPeriodoActual.xlsx"
+        pd.DataFrame([
+            ["NIVEL", "CODIGO_PROGRAMA", "PROGRAMA", "NRO_IDENTIFICACION", "COD_ESTUDIANTE", "NOMBRE_ESTUDIANTE"],
+            ["PREGRADO", "25", "INGENIERIA ELECTRONICA", "1011090672", "20241005001", "ANA QR"],
+        ]).to_excel(archivo, index=False, header=False)
+        archivo.seek(0)
+        self.assertEqual(est.cargar_estudiantes(archivo), 1)
+        self.assertEqual(est.resolver_codigo('{"nid":1011090672}'), "20241005001")
+        self.assertEqual(est.buscar_estudiante("1011090672")[1], "ANA QR")
+        db.ejecutar("""INSERT INTO reservas(fecha,hora,laboratorio,banco,codigo,nombres,proyecto,asiste,observaciones,activo)
+                    VALUES ('2026-09-15','08:00-10:00','604',1,'20241005001','ANA QR','INGENIERIA ELECTRONICA','','',1)""")
+        self.assertEqual(res.buscar_reservas_persona('{"nid":1011090672}')["codigo"].iloc[0], "20241005001")
 
 
 class AuthTest(unittest.TestCase):

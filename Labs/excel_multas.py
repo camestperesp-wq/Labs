@@ -1,7 +1,8 @@
-"""Importación transaccional de sanciones; clave: código y día de sanción."""
+"""Importación transaccional; identifica reportes por estudiante, día y detalle."""
 import io
 import re
 import unicodedata
+import zipfile
 import pandas as pd
 import database as db
 
@@ -20,11 +21,14 @@ def fecha(value, optional=False):
         if optional:
             return None
         raise ValueError("La fecha de sanción es obligatoria.")
-    if isinstance(value, (int, float)):
-        result = pd.to_datetime(value, unit="D", origin="1899-12-30")
-    else:
-        raw = texto(value)
-        result = pd.to_datetime(value, dayfirst=not bool(re.match(r"^\d{4}-", raw)), errors="raise")
+    try:
+        if isinstance(value, (int, float)):
+            result = pd.to_datetime(value, unit="D", origin="1899-12-30")
+        else:
+            raw = texto(value)
+            result = pd.to_datetime(value, dayfirst=not bool(re.match(r"^\d{4}-", raw)), errors="raise")
+    except (ValueError, TypeError, OverflowError):
+        raise ValueError("Fecha invalida.") from None
     if pd.isna(result):
         raise ValueError("Fecha inválida.")
     return result.strftime("%Y-%m-%d")
@@ -38,10 +42,35 @@ COLUMNS = {
 }
 
 
+def leer_tabla_multas(contenido):
+    # Excel Strict utiliza otros espacios de nombres. Normalizar una copia en
+    # memoria permite leer también esos libros sin modificar el original.
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(contenido)) as source, zipfile.ZipFile(output, "w") as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if item.filename.endswith((".xml", ".rels")):
+                data = data.replace(b"http://purl.oclc.org/ooxml/spreadsheetml/main",
+                                    b"http://schemas.openxmlformats.org/spreadsheetml/2006/main")
+                data = data.replace(b"http://purl.oclc.org/ooxml/officeDocument/relationships",
+                                    b"http://schemas.openxmlformats.org/officeDocument/2006/relationships")
+            target.writestr(item, data)
+    with pd.ExcelFile(io.BytesIO(output.getvalue())) as book:
+        sheet = next((s for s in book.sheet_names if normalizar(s) == "DEUDORES"), book.sheet_names[0])
+        preview = pd.read_excel(book, sheet_name=sheet, header=None, nrows=20, dtype=object)
+        header = next((i for i, row in preview.iterrows()
+                       if "CODIGO" in [normalizar(v) for v in row]), None)
+        if header is None:
+            raise ValueError("No se encontró el encabezado Código en las primeras 20 filas.")
+        return pd.read_excel(book, sheet_name=sheet, header=header, dtype=object), header
+
+
 def importar_multas_excel(archivo):
     contenido = archivo.getvalue() if hasattr(archivo, "getvalue") else archivo.read()
-    tabla = pd.read_excel(io.BytesIO(contenido), dtype=object)
+    tabla, header = leer_tabla_multas(contenido)
     headers = [normalizar(c) for c in tabla.columns]
+    headers = [{"NOMBRESYAPELLIDOS": "NOMBREDELESTUDIANTE",
+                "FECHACANCELACI": "FECHACANCELACION"}.get(c, c) for c in headers]
     if len(headers) != len(set(headers)):
         raise ValueError("Hay columnas repetidas en el archivo.")
     tabla.columns = headers
@@ -54,7 +83,8 @@ def importar_multas_excel(archivo):
         raise ValueError("Faltan columnas: " + ", ".join(sorted(missing)))
     records = {}
     repeated = 0
-    for index, row in tabla.dropna(how="all").iterrows():
+    omitted = 0
+    for index, row in tabla.dropna(how="all", subset=list(COLUMNS.values())).iterrows():
         try:
             values = {key: row[column] for key, column in COLUMNS.items()}
             code = texto(values["codigo"])
@@ -62,8 +92,17 @@ def importar_multas_excel(archivo):
                 if float(values["codigo"]) != int(values["codigo"]):
                     raise ValueError("El código no puede contener decimales.")
                 code = str(int(values["codigo"]))
-            if not code or not texto(values["nombres"]):
-                raise ValueError("Código y nombre son obligatorios.")
+            if not code:
+                raise ValueError("El código es obligatorio.")
+            if not texto(values["nombres"]):
+                with db.get_connection() as conn:
+                    estudiante = conn.execute(
+                        "SELECT nombres FROM estudiantes WHERE codigo=?", (code,)
+                    ).fetchone()
+                if not estudiante or not texto(estudiante[0]):
+                    omitted += 1
+                    continue
+                values["nombres"] = estudiante[0]
             payment = normalizar(texto(values["pago"]))
             if payment not in ("", "NO", "SI", "PAGADO", "PENDIENTE", "0", "1"):
                 raise ValueError("PAGO debe ser SI o NO.")
@@ -71,40 +110,43 @@ def importar_multas_excel(archivo):
             values.update(codigo=code, fecha=fecha(row[COLUMNS["fecha"]]),
                           cancelacion=fecha(row[COLUMNS["cancelacion"]], optional=True),
                           pago="SI" if payment in ("SI", "PAGADO", "1") else "NO")
-            key = (code, values["fecha"])
+            key = (code, values["fecha"], values["motivo"], values["sancion"], values["tecnico"])
             if key in records:
                 if records[key] != values:
-                    raise ValueError("Dos filas con el mismo código y fecha tienen datos diferentes.")
+                    raise ValueError("Dos filas del mismo reporte (código, fecha, descripción, sanción y técnico) tienen datos diferentes. Revise el pago y los demás campos.")
                 repeated += 1
             records[key] = values
         except (ValueError, TypeError, OverflowError) as error:
-            raise ValueError(f"Fila {index + 2}: {error}") from error
+            raise ValueError(f"Fila {index + header + 2}: {error}") from error
     if not records:
+        if omitted:
+            return {"insertadas": 0, "actualizadas": 0, "repetidas": repeated, "omitidas_sin_nombre": omitted}
         raise ValueError("El archivo no contiene sanciones.")
     inserted = updated = 0
     with db.get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        for (code, day), values in records.items():
+        for (code, day, motivo, sancion, tecnico), values in records.items():
             matches = []
-            for existing_id, existing_date in conn.execute(
-                    "SELECT id,fecha_multa FROM multas WHERE codigo_estudiante=?", (code,)):
+            for existing_id, existing_date, existing_motivo, existing_sancion, existing_tecnico in conn.execute(
+                    "SELECT id,fecha_multa,motivo,sancion,tecnico_asigna FROM multas WHERE codigo_estudiante=?", (code,)):
                 try:
-                    if fecha(existing_date) == day:
+                    if (fecha(existing_date) == day and
+                            (texto(existing_motivo), texto(existing_sancion), texto(existing_tecnico)) ==
+                            (motivo, sancion, tecnico)):
                         matches.append(existing_id)
                 except (ValueError, TypeError):
                     raise ValueError(f"El estudiante {code} tiene una fecha histórica inválida; corríjala antes de importar.")
-            if len(matches) > 1:
-                raise ValueError(f"Ya existen varias multas de {code} el {day}. Revise esos reportes antes de importar.")
             conn.execute("""INSERT INTO estudiantes(codigo,nombres,proyecto) VALUES (?,?,?)
                          ON CONFLICT(codigo) DO UPDATE SET nombres=excluded.nombres,proyecto=excluded.proyecto""",
                          (code, values["nombres"], values["proyecto"]))
             params = (code, day, values["cancelacion"], values["motivo"], values["sancion"],
                       values["tecnico"], values["pago"], values["correo"], values["observaciones"])
             if matches:
-                conn.execute("""UPDATE multas SET codigo_estudiante=?,fecha_multa=?,fecha_pago=?,motivo=?,
-                             sancion=?,tecnico_asigna=?,pagado=?,correo_usuario=?,observaciones=? WHERE id=?""",
-                             params + (matches[0],))
-                updated += 1
+                for match_id in matches:
+                    conn.execute("""UPDATE multas SET codigo_estudiante=?,fecha_multa=?,fecha_pago=?,motivo=?,
+                                 sancion=?,tecnico_asigna=?,pagado=?,correo_usuario=?,observaciones=? WHERE id=?""",
+                                 params + (match_id,))
+                updated += len(matches)
             else:
                 conn.execute("""INSERT INTO multas(codigo_estudiante,fecha_multa,fecha_pago,motivo,sancion,
                              tecnico_asigna,pagado,correo_usuario,observaciones) VALUES (?,?,?,?,?,?,?,?,?)""", params)
@@ -113,7 +155,7 @@ def importar_multas_excel(archivo):
     # Los préstamos también consultan el estado de multas.
     from prestamos_pasillos import _invalidar_cache_lecturas
     _invalidar_cache_lecturas()
-    return {"insertadas": inserted, "actualizadas": updated, "repetidas": repeated}
+    return {"insertadas": inserted, "actualizadas": updated, "repetidas": repeated, "omitidas_sin_nombre": omitted}
 
 
 def plantilla_multas_excel():

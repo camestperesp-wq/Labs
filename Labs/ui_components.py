@@ -8,6 +8,7 @@ import json
 import io
 import unicodedata
 import database as db
+import estudiantes as est
 import reservas as res
 import horario_fijo as hf
 import multas
@@ -979,7 +980,6 @@ def mostrar_formulario_agregar_multa(codigo):
     """
     Muestra el formulario para agregar una nueva multa a un estudiante.
     """
-    st.markdown('<p class="deudores-panel-title">Agregar nueva multa</p>', unsafe_allow_html=True)
     with st.container(border=True):
         col1, col2 = st.columns(2)
         with col1:
@@ -1016,16 +1016,17 @@ def mostrar_perfil_estudiante(codigo):
     Muestra el perfil completo de un estudiante en formato compacto.
     Optimizado para reducir reruns innecesarios.
     """
+    codigo = est.resolver_codigo(codigo)
     estudiante = db.ejecutar("SELECT nombres, proyecto FROM estudiantes WHERE codigo=?", (codigo,), fetch=True)
     if estudiante:
         nombre, carrera = estudiante[0]
-        st.markdown(f'<p class="deudores-panel-title">{nombre}</p>', unsafe_allow_html=True)
-        st.write(f"**Código:** {codigo}")
-        st.write(f"**Carrera:** {carrera if carrera else 'No registrada'}")
     else:
-        st.warning(" Estudiante no encontrado en la tabla de estudiantes.")
-        return
-    
+        nombre, carrera = "Sin nombre registrado", ""
+        st.warning("El estudiante no esta registrado en la tabla de estudiantes, pero se muestra el historial asociado al codigo.")
+    st.markdown(f"**{nombre or 'Sin nombre registrado'}**")
+    st.write(f"**Codigo:** {codigo}")
+    st.write(f"**Carrera:** {carrera if carrera else 'No registrada'}")
+
     df_multas = multas.obtener_multas_estudiante(codigo)
     if df_multas.empty:
         st.info(" No hay multas registradas para este estudiante.")
@@ -1036,7 +1037,6 @@ def mostrar_perfil_estudiante(codigo):
 
     # ===== MULTAS ACTIVAS =====
     if not df_activas.empty:
-        st.markdown(f'<p class="deudores-panel-title">Multas activas ({len(df_activas)})</p>', unsafe_allow_html=True)
         
         for idx, (_, m) in enumerate(df_activas.iterrows()):
             # Usar un container para cada multa
@@ -1162,11 +1162,11 @@ def mostrar_perfil_estudiante(codigo):
 def mostrar_deudores():
     from excel_multas import importar_multas_excel, plantilla_multas_excel
     with st.expander("Importar multas desde Excel"):
-        st.caption("Nombre del estudiante es obligatorio y debe ir inmediatamente después de Código. La columna Correo usuario puede contener celdas vacías.")
+        st.caption("La columna Nombre del estudiante (o Nombres y apellidos) debe ir inmediatamente después de Código. Si el nombre está vacío, se buscará por código en la base de datos. Correo, fecha de cancelación, pago y observaciones pueden estar vacíos; un pago vacío queda pendiente.")
         st.download_button("Descargar plantilla de multas", plantilla_multas_excel(),
                            file_name="plantilla_multas.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        st.caption("Los reportes existentes se actualizan por código y fecha de sanción. La carga es completa o no se guarda ningún cambio.")
+        st.caption("Se omiten las filas sin nombre que tampoco tengan un nombre registrado por código. Se permiten varias multas el mismo día: los reportes se identifican por código, fecha, descripción del reporte, sanción y técnico. Al reimportar, se actualiza el reporte coincidente; cambiar esos detalles crea otro reporte. Si hay errores en las demás filas, no se guarda ningún cambio.")
         archivo = st.file_uploader("Archivo de sanciones", type=["xlsx"], key="excel_multas")
         if st.button("Importar multas", disabled=archivo is None, key="importar_multas"):
             try:
@@ -1175,6 +1175,8 @@ def mostrar_deudores():
                 st.error(str(error))
             else:
                 st.success(f"{resultado['insertadas']} nuevas, {resultado['actualizadas']} actualizadas y {resultado['repetidas']} filas repetidas omitidas.")
+                if resultado["omitidas_sin_nombre"]:
+                    st.info(f"{resultado['omitidas_sin_nombre']} filas omitidas por no tener nombre en el Excel ni en la base de datos.")
     df_deudores = multas.obtener_deudores()
 
     st.markdown(
@@ -1212,7 +1214,6 @@ def mostrar_deudores():
             .deudores-card.accent {
                 border-left-color: #f2c230;
             }
-            .deudores-panel-title {
                 color: #731116;
                 font-weight: 800;
                 margin: 0.75rem 0 0.15rem 0;
@@ -1252,8 +1253,7 @@ def mostrar_deudores():
                 <span>Mayor numero de multas por estudiante</span>
             </div>
         </div>
-        <p class="deudores-panel-title">Busqueda y seguimiento</p>
-        <p class="deudores-panel-copy">Busca por codigo o nombre para abrir el historial completo de un estudiante.</p>
+        <p class="deudores-panel-title">Busqueda de estudiantes</p>
         """,
         unsafe_allow_html=True,
     )
@@ -1270,8 +1270,8 @@ def mostrar_deudores():
     buscar_col, volver_col = st.columns([4, 1])
     with buscar_col:
         search_term = st.text_input(
-            "Buscar por código o nombre",
-            placeholder="Ej: 20211005067 o Juan",
+            "Buscar estudiante",
+            placeholder="Buscar por nombre, cedula o codigo...",
             key="deudor_search",
             on_change=reiniciar_paginas_deudores,
         )
@@ -1469,16 +1469,16 @@ def mostrar_deudores():
     if df_deudores.empty and not search_term:
         st.info("No hay estudiantes con multas activas.")
 
+    search_term = est.normalizar_entrada_busqueda(search_term)
     if search_term:
         df_filtrado = df_deudores[
-            df_deudores["codigo_estudiante"].str.contains(search_term, case=False, na=False)
-            | df_deudores["nombres"].str.contains(search_term, case=False, na=False)
+            df_deudores["codigo_estudiante"].astype(str).str.contains(est.resolver_codigo(search_term), case=False, na=False)
+            | df_deudores["nombres"].astype(str).str.contains(search_term, case=False, na=False)
         ]
     else:
         df_filtrado = df_deudores
 
     if not df_filtrado.empty:
-        st.markdown('<p class="deudores-panel-title">Lista de deudores</p>', unsafe_allow_html=True)
         pagina_key = "deudores_pagina"
         total_paginas = max(1, (len(df_filtrado) + 4) // 5)
         st.session_state[pagina_key] = min(max(1, st.session_state.get(pagina_key, 1)), total_paginas)
@@ -1544,105 +1544,6 @@ def mostrar_deudores():
                 st.session_state[pagina_key] += 1
                 st.rerun()
         st.divider()
-    st.markdown('<p class="deudores-panel-title">Reporte detallado de multas</p>', unsafe_allow_html=True)
-    st.caption("Informe institucional completo para seguimiento administrativo, conciliación de pagos y auditoría.")
-    query_detalle = """
-        SELECT
-            m.codigo_estudiante,
-            e.nombres,
-            e.proyecto as carrera,
-            m.fecha_multa,
-            m.fecha_pago,
-            m.motivo,
-            m.sancion,
-            m.tecnico_asigna,
-            m.tecnico_recibe,
-            CASE WHEN m.pagado = 'SI' THEN 'Pagada' ELSE 'Activa' END AS estado
-        FROM multas m
-        LEFT JOIN estudiantes e ON m.codigo_estudiante = e.codigo
-        ORDER BY CASE WHEN m.pagado = 'NO' THEN 0 ELSE 1 END, e.nombres, m.fecha_multa DESC
-    """
-    df_detalle = db.fetch_df(query_detalle)
-    if not df_detalle.empty:
-        fechas_reporte = pd.to_datetime(df_detalle["fecha_multa"], format="mixed", dayfirst=True, errors="coerce")
-        fechas_iso = df_detalle["fecha_multa"].astype(str).str.match(r"^\d{4}-\d{2}-\d{2}")
-        fechas_reporte.loc[fechas_iso] = pd.to_datetime(df_detalle.loc[fechas_iso, "fecha_multa"], format="ISO8601", errors="coerce")
-        fechas_reporte = fechas_reporte.dt.date
-        validas = fechas_reporte.dropna()
-        desde_col, hasta_col = st.columns(2)
-        desde = desde_col.date_input("Multas desde", value=min(validas) if not validas.empty else datetime.now().date(), key="multas_reporte_desde")
-        hasta = hasta_col.date_input("Multas hasta", value=max(validas) if not validas.empty else datetime.now().date(), key="multas_reporte_hasta")
-        if desde > hasta:
-            st.error("La fecha inicial no puede ser posterior a la final.")
-            return
-        if fechas_reporte.isna().any():
-            st.warning("Hay multas sin una fecha válida; no se incluyen en el rango seleccionado.")
-        df_detalle = df_detalle[fechas_reporte.notna() & (fechas_reporte >= desde) & (fechas_reporte <= hasta)]
-        filtro_col, descarga_col = st.columns([2.2, 1])
-        with filtro_col:
-            filtro_estado = st.segmented_control(
-                "Estado incluido",
-                ["Todas", "Activas", "Pagadas"],
-                default="Todas",
-                key="filtro_reporte_multas",
-            )
-        if filtro_estado == "Activas":
-            df_reporte = df_detalle[df_detalle["estado"] == "Activa"].copy()
-        elif filtro_estado == "Pagadas":
-            df_reporte = df_detalle[df_detalle["estado"] == "Pagada"].copy()
-        else:
-            df_reporte = df_detalle.copy()
-
-        total_reporte = len(df_reporte)
-        activas_reporte = int((df_reporte["estado"] == "Activa").sum())
-        pagadas_reporte = int((df_reporte["estado"] == "Pagada").sum())
-        estudiantes_reporte = int(df_reporte["codigo_estudiante"].nunique())
-        metrica_1, metrica_2, metrica_3, metrica_4 = st.columns(4)
-        metrica_1.metric("Registros", total_reporte)
-        metrica_2.metric("Activas", activas_reporte)
-        metrica_3.metric("Pagadas", pagadas_reporte)
-        metrica_4.metric("Estudiantes", estudiantes_reporte)
-
-        nombres_columnas = {
-            "codigo_estudiante": "Código",
-            "nombres": "Estudiante",
-            "carrera": "Proyecto curricular",
-            "fecha_multa": "Fecha de multa",
-            "fecha_pago": "Fecha de pago",
-            "motivo": "Detalle de la multa",
-            "sancion": "Sanción",
-            "tecnico_asigna": "Técnico que asigna",
-            "tecnico_recibe": "Técnico que recibe",
-            "estado": "Estado",
-        }
-        df_exportar = df_reporte.rename(columns=nombres_columnas)
-        excel_multas = crear_excel_institucional(
-            df_exportar,
-            "Reporte detallado de multas",
-            "Seguimiento de obligaciones, sanciones y paz y salvos",
-            [
-                ("Filtro", filtro_estado),
-                ("Desde", desde.isoformat()),
-                ("Hasta", hasta.isoformat()),
-                ("Registros", total_reporte),
-                ("Multas activas", activas_reporte),
-                ("Multas pagadas", pagadas_reporte),
-                ("Estudiantes incluidos", estudiantes_reporte),
-            ],
-            nombre_hoja="Multas",
-        )
-        with descarga_col:
-            st.write("")
-            st.write("")
-            st.download_button(
-                label="Descargar Excel institucional",
-                data=excel_multas,
-                file_name=f"reporte_multas_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="descargar_deudores_detalle",
-                use_container_width=True,
-            )
-
     if search_term and df_filtrado.empty:
         st.info("El estudiante no tiene multas activas. Buscando en la base de datos de estudiantes...")
         df_estudiantes = multas.buscar_estudiantes(search_term)
@@ -1664,7 +1565,6 @@ def mostrar_deudores():
                     else:
                         st.error("Codigo y nombre son obligatorios.")
         else:
-            st.markdown('<p class="deudores-panel-title">Estudiantes encontrados</p>', unsafe_allow_html=True)
             pagina_est_key = "deudores_estudiantes_pagina"
             total_paginas_est = max(1, (len(df_estudiantes) + 4) // 5)
             pagina_est = min(max(1, st.session_state.get(pagina_est_key, 1)), total_paginas_est)
@@ -1706,3 +1606,135 @@ def mostrar_deudores():
         st.info("No hay deudores. Usa el buscador para gestionar multas de estudiantes especificos.")
     else:
         st.caption("Usa el buscador para ver el historial completo de un estudiante.")
+
+    st.caption("Informe institucional completo para seguimiento administrativo, conciliación de pagos y auditoría.")
+    query_detalle = """
+        SELECT
+            m.codigo_estudiante,
+            e.nombres,
+            e.proyecto as carrera,
+            m.fecha_multa,
+            m.fecha_pago,
+            m.motivo,
+            m.sancion,
+            m.tecnico_asigna,
+            m.tecnico_recibe,
+            CASE WHEN m.pagado = 'SI' THEN 'Pagada' ELSE 'Activa' END AS estado
+        FROM multas m
+        LEFT JOIN estudiantes e ON m.codigo_estudiante = e.codigo
+        ORDER BY CASE WHEN m.pagado = 'NO' THEN 0 ELSE 1 END, e.nombres, m.fecha_multa DESC
+    """
+    df_detalle = db.fetch_df(query_detalle)
+    if not df_detalle.empty:
+        fechas_reporte = pd.to_datetime(df_detalle["fecha_multa"], format="mixed", dayfirst=True, errors="coerce")
+        fechas_iso = df_detalle["fecha_multa"].astype(str).str.match(r"^\d{4}-\d{2}-\d{2}")
+        fechas_reporte.loc[fechas_iso] = pd.to_datetime(df_detalle.loc[fechas_iso, "fecha_multa"], format="ISO8601", errors="coerce")
+        df_detalle = df_detalle.assign(_fecha_multa_filtro=fechas_reporte.dt.date)
+        validas = df_detalle["_fecha_multa_filtro"].dropna()
+        desde_col, hasta_col = st.columns(2)
+        hoy = datetime.now().date()
+        fecha_minima = datetime(1900, 1, 1).date()
+        fecha_maxima = datetime(2100, 12, 31).date()
+        fecha_desde_inicial = min(validas) if not validas.empty else hoy
+        fecha_hasta_inicial = max(validas) if not validas.empty else hoy
+        desde = desde_col.date_input(
+            "Multas desde",
+            value=fecha_desde_inicial,
+            min_value=fecha_minima,
+            max_value=fecha_maxima,
+            key="multas_reporte_desde_v2",
+        )
+        hasta = hasta_col.date_input(
+            "Multas hasta",
+            value=fecha_hasta_inicial,
+            min_value=fecha_minima,
+            max_value=fecha_maxima,
+            key="multas_reporte_hasta_v2",
+        )
+        if desde > hasta:
+            st.error("La fecha inicial no puede ser posterior a la final.")
+            return
+        if df_detalle["_fecha_multa_filtro"].isna().any():
+            st.warning("Hay multas sin una fecha válida; no se incluyen en el rango seleccionado.")
+        df_detalle = df_detalle[
+            df_detalle["_fecha_multa_filtro"].notna()
+            & (df_detalle["_fecha_multa_filtro"] >= desde)
+            & (df_detalle["_fecha_multa_filtro"] <= hasta)
+        ]
+        filtro_col, descarga_col = st.columns([2.2, 1])
+        with filtro_col:
+            filtro_estado = st.segmented_control(
+                "Estado incluido",
+                ["Todas", "Activas", "Pagadas"],
+                default="Todas",
+                key="filtro_reporte_multas",
+            )
+        if filtro_estado == "Activas":
+            df_reporte = df_detalle[df_detalle["estado"] == "Activa"].copy()
+        elif filtro_estado == "Pagadas":
+            df_reporte = df_detalle[df_detalle["estado"] == "Pagada"].copy()
+        else:
+            df_reporte = df_detalle.copy()
+        df_reporte = df_reporte.sort_values(
+            ["_fecha_multa_filtro", "codigo_estudiante"],
+            ascending=[False, True],
+        ).drop(columns=["_fecha_multa_filtro"])
+
+        total_reporte = len(df_reporte)
+        activas_reporte = int((df_reporte["estado"] == "Activa").sum())
+        pagadas_reporte = int((df_reporte["estado"] == "Pagada").sum())
+        estudiantes_reporte = int(df_reporte["codigo_estudiante"].nunique())
+        metrica_1, metrica_2, metrica_3, metrica_4 = st.columns(4)
+        metrica_1.metric("Registros", total_reporte)
+        metrica_2.metric("Activas", activas_reporte)
+        metrica_3.metric("Pagadas", pagadas_reporte)
+        metrica_4.metric("Estudiantes", estudiantes_reporte)
+
+        nombres_columnas = {
+            "codigo_estudiante": "Código",
+            "nombres": "Estudiante",
+            "carrera": "Proyecto curricular",
+            "fecha_multa": "Fecha de multa",
+            "fecha_pago": "Fecha de pago",
+            "motivo": "Detalle de la multa",
+            "sancion": "Sanción",
+            "tecnico_asigna": "Técnico que asigna",
+            "tecnico_recibe": "Técnico que recibe",
+            "estado": "Estado",
+        }
+        df_exportar = df_reporte.rename(columns=nombres_columnas)
+        if df_exportar.empty:
+            st.info("No hay multas dentro del rango y estado seleccionados.")
+        else:
+            st.dataframe(df_exportar, hide_index=True, use_container_width=True)
+        excel_multas = crear_excel_institucional(
+            df_exportar,
+            "Reporte detallado de multas",
+            "Seguimiento de obligaciones, sanciones y paz y salvos",
+            [
+                ("Filtro", filtro_estado),
+                ("Desde", desde.isoformat()),
+                ("Hasta", hasta.isoformat()),
+                ("Registros", total_reporte),
+                ("Multas activas", activas_reporte),
+                ("Multas pagadas", pagadas_reporte),
+                ("Estudiantes incluidos", estudiantes_reporte),
+            ],
+            nombre_hoja="Multas",
+        )
+        descarga_key = (
+            f"descargar_deudores_detalle_{desde.isoformat()}_{hasta.isoformat()}_"
+            f"{filtro_estado}_{total_reporte}"
+        )
+        with descarga_col:
+            st.write("")
+            st.write("")
+            st.download_button(
+                label="Descargar Excel institucional",
+                data=excel_multas,
+                file_name=f"reporte_multas_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=descarga_key,
+                use_container_width=True,
+            )
+

@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from constants import LABORATORIOS, HORAS, LABS_NAMES
 import reservas as res
 import prestamos_pasillos as prestamos_pasillos_data
+import estudiantes as est
 from ui_components import render_editor_asistencias
 from exportaciones import crear_excel_institucional as _crear_excel_institucional
 
@@ -69,17 +70,18 @@ def mostrar_consulta_fecha_lab():
             _render_editor_paginado(df, "labs_fecha_lab", params["lab"])
 
 def mostrar_busqueda_codigo():
-    st.subheader("Buscar por código")
+    st.subheader("Buscar por codigo, cedula o QR")
     with st.form("form_buscar_codigo", border=False):
         buscar_col, boton_col = st.columns([5, 1], vertical_alignment="bottom")
         with buscar_col:
-            termino = st.text_input("Código", key="labs_termino_persona")
+            termino = st.text_input("Codigo, cedula o QR", key="labs_termino_persona")
         with boton_col:
             buscar = st.form_submit_button("Buscar", use_container_width=True)
 
     if buscar:
+        termino = est.normalizar_entrada_busqueda(termino)
         if termino and len(termino) >= 3:
-            st.session_state.labs_codigo_busqueda = termino
+            st.session_state.labs_codigo_busqueda = est.resolver_codigo(termino)
             st.session_state.pagina_labs_persona = 1
             st.rerun()
         else:
