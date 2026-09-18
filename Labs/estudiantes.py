@@ -1,5 +1,7 @@
 ﻿# estudiantes.py
 
+import base64
+import binascii
 import json
 import re
 
@@ -9,28 +11,83 @@ from datetime import datetime, timedelta
 from utils import normalizar_texto
 
 
-def normalizar_entrada_busqueda(valor):
+CLAVES_DOCUMENTO = ("nid", "cc", "cedula", "c?dula", "documento", "identificacion", "identificaci?n", "nro_identificacion")
+
+
+def _extraer_numero_documento(texto):
+    numeros = re.findall(r"\d{6,10}", str(texto or ""))
+    return numeros[0] if numeros else ""
+
+
+def _documento_desde_json(data):
+    if not isinstance(data, dict):
+        return ""
+    normalizado = {str(k).strip().lower(): v for k, v in data.items()}
+    for clave in CLAVES_DOCUMENTO:
+        if clave in normalizado:
+            documento = _extraer_numero_documento(normalizado[clave])
+            if documento:
+                return documento
+    return _extraer_numero_documento(json.dumps(data, ensure_ascii=False))
+
+
+def _decodificar_base64(texto):
+    entrada = str(texto or "").strip()
+    if len(entrada) < 8:
+        return None
+    coincidencias = re.findall(r"[A-Za-z0-9+/=_-]{8,}", entrada)
+    candidatos = sorted(coincidencias or [entrada], key=len, reverse=True)
+    for candidato in candidatos:
+        limpio = candidato.strip("=")
+        fragmentos = []
+        for inicio in range(0, max(1, len(limpio) - 7)):
+            for fin in range(len(limpio), inicio + 7, -1):
+                fragmentos.append(limpio[inicio:fin])
+        fragmentos.sort(key=len, reverse=True)
+        vistos = set()
+        for fragmento in fragmentos:
+            if fragmento in vistos:
+                continue
+            vistos.add(fragmento)
+            normalizado = fragmento.replace("-", "+").replace("_", "/")
+            normalizado += "=" * (-len(normalizado) % 4)
+            try:
+                decodificado = base64.b64decode(normalizado, validate=True)
+                texto_decodificado = decodificado.decode("utf-8").strip()
+                if texto_decodificado and (
+                    re.search(r"\d{6,10}", texto_decodificado)
+                    or texto_decodificado.startswith("{")
+                    or re.search(r"(?i)nid|cc|cedula|documento|identificacion", texto_decodificado)
+                ):
+                    return texto_decodificado
+            except (binascii.Error, UnicodeDecodeError, ValueError):
+                continue
+    return None
+
+def normalizar_entrada_busqueda(valor, _permitir_base64=True):
     texto = str(valor or "").strip()
     if not texto:
         return ""
     if texto.startswith("{") and texto.endswith("}"):
         try:
-            data = json.loads(texto)
-            if "nid" in data:
-                return re.sub(r"\D", "", str(data["nid"]))
+            documento = _documento_desde_json(json.loads(texto))
+            if documento:
+                return documento
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
-    match = re.search(r'"nid"\s*:\s*"?(\d+)"?', texto)
+    match = re.search(r'"(?:nid|cc|cedula|c?dula|documento|identificacion|identificaci?n|nro_identificacion)"\s*:\s*"?(\d{6,10})"?', texto, flags=re.IGNORECASE)
     if match:
         return match.group(1)
 
-    # Algunas pistolas lectoras entregan el QR/codigo de barras con caracteres
-    # corruptos alrededor del documento, por ejemplo: [nid[?1011090672*.
-    # En esos casos se conserva solo la cedula para buscarla como documento.
-    if re.search(r"(?i)nid|[\[\]{}*\u00d1\u00f1]", texto):
-        numeros = re.findall(r"\d{6,10}", texto)
-        if numeros:
-            return numeros[0]
+    if re.search(r"(?i)nid|[\[\]{}*Ññ]", texto):
+        documento = _extraer_numero_documento(texto)
+        if documento:
+            return documento
+
+    if _permitir_base64:
+        decodificado = _decodificar_base64(texto)
+        if decodificado and decodificado != texto:
+            return normalizar_entrada_busqueda(decodificado, _permitir_base64=False)
     return texto
 
 

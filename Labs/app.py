@@ -1142,19 +1142,58 @@ st.components.v1.html(
         }
         window.parent.__labsClockTimer = window.parent.setInterval(updateClock, 15000);
 
-        function normalizeScan(value) {
+        function normalizeScan(value, allowBase64 = true) {
             const text = String(value || "").trim();
             if (!text) return text;
+            const documentKeys = ["nid", "cc", "cedula", "c?dula", "documento", "identificacion", "identificaci?n", "nro_identificacion"];
             try {
                 const parsed = JSON.parse(text);
-                if (parsed && parsed.nid !== undefined) return String(parsed.nid).replace(/\\D/g, "");
+                if (parsed && typeof parsed === "object") {
+                    for (const key of documentKeys) {
+                        if (parsed[key] !== undefined) {
+                            const clean = String(parsed[key]).replace(/\D/g, "");
+                            if (clean.length >= 6 && clean.length <= 10) return clean;
+                        }
+                    }
+                    const fallback = JSON.stringify(parsed).match(/\d{6,10}/);
+                    if (fallback) return fallback[0];
+                }
             } catch (error) {}
-            const match = text.match(/"nid"\\s*:\\s*"?(\\d+)"?/i);
+            const match = text.match(/"(?:nid|cc|cedula|c?dula|documento|identificacion|identificaci?n|nro_identificacion)"\s*:\s*"?(\d{6,10})"?/i);
             if (match) return match[1];
-            if (/nid|[\\[\\]{}*\u00d1\u00f1]/i.test(text)) {
-                const dirtyMatch = text.match(/\\d{6,10}/);
+            if (/nid|[\[\]{}*\u00d1\u00f1]/i.test(text)) {
+                const dirtyMatch = text.match(/\d{6,10}/);
                 if (dirtyMatch) return dirtyMatch[0];
             }
+            if (allowBase64) {
+                const chunks = text.match(/[A-Za-z0-9+/=_-]{8,}/g) || [];
+                chunks.sort((a, b) => b.length - a.length);
+                for (const chunk of chunks) {
+                    const stripped = chunk.replace(/=+$/g, "");
+                    const fragments = [];
+                    for (let start = 0; start <= Math.max(0, stripped.length - 8); start++) {
+                        for (let end = stripped.length; end >= start + 8; end--) {
+                            fragments.push(stripped.slice(start, end));
+                        }
+                    }
+                    fragments.sort((a, b) => b.length - a.length);
+                    const seen = new Set();
+                    for (const fragment of fragments) {
+                        if (seen.has(fragment)) continue;
+                        seen.add(fragment);
+                        try {
+                            const piece = fragment.replace(/-/g, "+").replace(/_/g, "/");
+                            const padded = piece + "=".repeat((4 - (piece.length % 4)) % 4);
+                            const decoded = decodeURIComponent(escape(window.parent.atob(padded)));
+                            if (decoded && /\d{6,10}|nid|cc|cedula|documento|identificacion|{/i.test(decoded)) {
+                                return normalizeScan(decoded, false);
+                            }
+                        } catch (error) {}
+                    }
+                }
+            }
+            return text;
+        }
             return text;
         }
 

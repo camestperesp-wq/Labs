@@ -236,6 +236,20 @@ class ImportacionesTest(unittest.TestCase):
 
 
 
+
+    def test_busqueda_por_base64_de_cedula_o_qr(self):
+        import estudiantes as est
+        db.ejecutar("""INSERT INTO estudiantes(codigo,nombres,proyecto,documento)
+                    VALUES ('20241005001', 'ANA QR', 'INGENIERIA ELECTRONICA', '1011090672')""")
+        self.assertEqual(est.normalizar_entrada_busqueda("eyJuaWQiOjEwMTEwOTA2NzJ9"), "1011090672")
+        self.assertEqual(est.normalizar_entrada_busqueda("MTAxMTA5MDY3Mg=="), "1011090672")
+        self.assertEqual(est.normalizar_entrada_busqueda("W25pZFvDkTEwMTEwOTA2NzIq"), "1011090672")
+        self.assertEqual(est.normalizar_entrada_busqueda("eyJJZFRlcm1pbm8iOjI4ODM5MywiY2MiOiIxMDExMDkwNjcyIn0="), "1011090672")
+        self.assertEqual(est.normalizar_entrada_busqueda("xxxeyJJZFRlcm1pbm8iOjI4ODM5MywiY2MiOiIxMDExMDkwNjcyIn0=?"), "1011090672")
+        self.assertEqual(est.resolver_codigo("eyJuaWQiOjEwMTEwOTA2NzJ9"), "20241005001")
+        self.assertEqual(est.resolver_codigo("W25pZFvDkTEwMTEwOTA2NzIq"), "20241005001")
+        self.assertEqual(est.resolver_codigo("eyJJZFRlcm1pbm8iOjI4ODM5MywiY2MiOiIxMDExMDkwNjcyIn0="), "20241005001")
+
     def test_busqueda_por_lectura_corrupta_de_pistola(self):
         import estudiantes as est
         db.ejecutar("""INSERT INTO estudiantes(codigo,nombres,proyecto,documento)
