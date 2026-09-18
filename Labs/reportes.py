@@ -138,71 +138,53 @@ def mostrar_busqueda_codigo():
 
         resumen = pd.DataFrame()
         if not df_persona.empty:
-            # Una fila por persona: la próxima reserva desde hoy o, si no hay
-            # próximas, la reserva más reciente. No se presenta el historial.
             reservas = df_persona.copy()
             reservas["_fecha"] = pd.to_datetime(reservas["fecha"], errors="coerce")
-            hoy = pd.Timestamp(datetime.now().date())
-            filas_actuales = []
-            for _, reservas_persona in reservas.groupby("codigo", sort=False):
-                proximas = reservas_persona[reservas_persona["_fecha"] >= hoy]
-                indice = (
-                    proximas["_fecha"].idxmin()
-                    if not proximas.empty
-                    else reservas_persona["_fecha"].idxmax()
-                )
-                filas_actuales.append(reservas.loc[indice])
-
-            resumen = pd.DataFrame(filas_actuales)
-            resumen["laboratorio"] = resumen["laboratorio"].map(
+            reservas["laboratorio"] = reservas["laboratorio"].map(
                 lambda salon: LABS_NAMES.get(salon, salon)
             )
-            resumen["fecha"] = resumen["_fecha"].dt.strftime("%d/%m/%Y").fillna(resumen["fecha"])
-            resumen["multas_activas"] = resumen["multas_activas"].fillna(0).astype(int)
-            resumen["Asistencia"] = resumen["asiste"].map({
-                "Si": "Asistió",
-                "No": "No asistió",
-            }).fillna("Pendiente")
-            resumen = resumen.rename(columns={
-                "codigo": "Código",
+            reservas["fecha"] = reservas["_fecha"].dt.strftime("%d/%m/%Y").fillna(reservas["fecha"])
+            reservas["multas_activas"] = reservas["multas_activas"].fillna(0).astype(int)
+            reservas["Asistencia"] = "Pendiente"
+            resumen = reservas.rename(columns={
+                "codigo": "Codigo",
                 "nombres": "Nombre",
                 "proyecto": "Proyecto",
                 "fecha": "Fecha",
-                "laboratorio": "Salón",
+                "laboratorio": "Salon",
                 "hora": "Hora",
             })
 
             st.subheader("Horario y Detalles de la Clase")
-            st.dataframe(
-                resumen[["Salón", "Fecha", "Hora", "Asistencia"]],
-                use_container_width=True,
+            tabla_asistencia = resumen[["id", "Salon", "Fecha", "Hora", "Asistencia"]].copy()
+            tabla_editada = st.data_editor(
+                tabla_asistencia,
+                key=f"busqueda_asistencia_editor_{termino}",
                 hide_index=True,
+                use_container_width=True,
+                disabled=["id", "Salon", "Fecha", "Hora"],
+                column_config={
+                    "id": None,
+                    "Asistencia": st.column_config.SelectboxColumn(
+                        "Asistencia",
+                        options=["Pendiente", "Asistió", "No asistió"],
+                        required=True,
+                    ),
+                },
             )
-
-            st.caption("Gestión de asistencia de la reserva mostrada")
-            for _, persona in resumen.iterrows():
-                estado = persona["Asistencia"]
-                with st.container(border=True):
-                    etiqueta, asistio_col, no_asistio_col = st.columns([3, 1, 1], vertical_alignment="center")
-                    etiqueta.markdown(
-                        f"**{persona['Nombre']}** · Estado actual: **{estado}**"
-                    )
-                    asistio_col.button(
-                        "Asistió",
-                        key=f"busqueda_asistio_{int(persona['id'])}",
-                        disabled=estado == "Asistió",
-                        use_container_width=True,
-                        on_click=res.actualizar_asiste,
-                        args=(int(persona["id"]), "Si", None),
-                    )
-                    no_asistio_col.button(
-                        "No asistió",
-                        key=f"busqueda_no_asistio_{int(persona['id'])}",
-                        disabled=estado == "No asistió",
-                        use_container_width=True,
-                        on_click=res.actualizar_asiste,
-                        args=(int(persona["id"]), "No", None),
-                    )
+            cambios = tabla_editada.merge(
+                tabla_asistencia[["id", "Asistencia"]],
+                on="id",
+                suffixes=("_nuevo", "_anterior"),
+            )
+            for _, cambio in cambios.iterrows():
+                nuevo_estado = str(cambio["Asistencia_nuevo"] or "Pendiente")
+                estado_anterior = str(cambio["Asistencia_anterior"] or "Pendiente")
+                if nuevo_estado == estado_anterior or nuevo_estado == "Pendiente":
+                    continue
+                estado_db = "Si" if nuevo_estado == "Asistió" else "No"
+                res.actualizar_asiste(int(cambio["id"]), estado_db, None)
+                st.rerun()
         else:
             st.subheader("Horario y Detalles de la Clase")
             st.info("El usuario no tiene una reserva vigente o seleccionable.")

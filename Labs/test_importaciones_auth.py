@@ -2,6 +2,7 @@ import asyncio
 import io
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -159,8 +160,9 @@ class ImportacionesTest(unittest.TestCase):
         self.assertEqual(len(view.text_input), 1)
         view.text_input[0].set_value("Concepto personalizado").run()
         import multas
-        multas.agregar_multa("123", "2026-09-10", "Concepto personalizado", "", "Tecnico")
+        multas.agregar_multa("123", "2026-09-10", "Concepto personalizado", "", "Tecnico", "Observación de prueba")
         self.assertIn("2026-09-10: Concepto personalizado", multas.detalles_multas_activas()["123"])
+        self.assertEqual(db.ejecutar("SELECT observaciones FROM multas WHERE codigo_estudiante='123'", fetch=True)[0][0], "Observación de prueba")
         self.assertIn("Concepto personalizado", multas.obtener_motivos_registrados())
         view.run()
         self.assertNotIn("Concepto personalizado", view.selectbox[0].options)
@@ -233,6 +235,14 @@ class ImportacionesTest(unittest.TestCase):
         self.assertEqual(stored["profesor"], "Ana Pérez")
 
 
+
+    def test_busqueda_por_lectura_corrupta_de_pistola(self):
+        import estudiantes as est
+        db.ejecutar("""INSERT INTO estudiantes(codigo,nombres,proyecto,documento)
+                    VALUES ('20241005001', 'ANA QR', 'INGENIERIA ELECTRONICA', '1011090672')""")
+        self.assertEqual(est.normalizar_entrada_busqueda("[nid[?1011090672*"), "1011090672")
+        self.assertEqual(est.resolver_codigo("[nid[?1011090672*"), "20241005001")
+
     def test_cargar_matriculados_periodo_actual_y_buscar_por_documento_qr(self):
         import estudiantes as est
         import reservas as res
@@ -246,9 +256,21 @@ class ImportacionesTest(unittest.TestCase):
         self.assertEqual(est.cargar_estudiantes(archivo), 1)
         self.assertEqual(est.resolver_codigo('{"nid":1011090672}'), "20241005001")
         self.assertEqual(est.buscar_estudiante("1011090672")[1], "ANA QR")
+        hoy = date.today().strftime("%Y-%m-%d")
+        ayer = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
         db.ejecutar("""INSERT INTO reservas(fecha,hora,laboratorio,banco,codigo,nombres,proyecto,asiste,observaciones,activo)
-                    VALUES ('2026-09-15','08:00-10:00','604',1,'20241005001','ANA QR','INGENIERIA ELECTRONICA','','',1)""")
-        self.assertEqual(res.buscar_reservas_persona('{"nid":1011090672}')["codigo"].iloc[0], "20241005001")
+                    VALUES (?, '08:00-10:00','604',1,'20241005001','ANA QR','INGENIERIA ELECTRONICA','','',1)""", (hoy,))
+        db.ejecutar("""INSERT INTO reservas(fecha,hora,laboratorio,banco,codigo,nombres,proyecto,asiste,observaciones,activo)
+                    VALUES (?, '10:00-12:00','604',2,'20241005001','ANA QR','HISTORICA','','',1)""", (ayer,))
+        db.ejecutar("""INSERT INTO reservas(fecha,hora,laboratorio,banco,codigo,nombres,proyecto,asiste,observaciones,activo)
+                    VALUES (?, '12:00-14:00','604',3,'20241005001','ANA QR','INACTIVA','','',0)""", (hoy,))
+        db.ejecutar("""INSERT INTO reservas(fecha,hora,laboratorio,banco,codigo,nombres,proyecto,asiste,observaciones,activo)
+                    VALUES (?, '14:00-16:00','604',4,'20241005001','ANA QR','YA ASISTIO','Si','',1)""", (hoy,))
+        db.ejecutar("""INSERT INTO reservas(fecha,hora,laboratorio,banco,codigo,nombres,proyecto,asiste,observaciones,activo)
+                    VALUES (?, '16:00-18:00','604',5,'20241005001','ANA QR','NO ASISTIO','No','',1)""", (hoy,))
+        reservas_pendientes = res.buscar_reservas_persona('{"nid":1011090672}')
+        self.assertEqual(reservas_pendientes["codigo"].tolist(), ["20241005001", "20241005001"])
+        self.assertEqual(reservas_pendientes["proyecto"].tolist(), ["HISTORICA", "INGENIERIA ELECTRONICA"])
 
 
 class AuthTest(unittest.TestCase):

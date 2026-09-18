@@ -47,7 +47,7 @@ def registrar_equipo(placa, nombre, numero_interno, consumible=False):
     consumible = bool(consumible)
     placa = None if consumible else _texto_opcional(placa)
     nombre = _texto(nombre, "Nombre del equipo")
-    numero_interno = None if consumible else _texto(numero_interno, "N?mero interno")
+    numero_interno = None if consumible else _texto(numero_interno, "Número interno")
     try:
         with db.get_connection() as conn:
             conn.execute(
@@ -58,7 +58,7 @@ def registrar_equipo(placa, nombre, numero_interno, consumible=False):
             conn.commit()
     except Exception as error:
         if "UNIQUE constraint failed" in str(error):
-            raise ValueError("La placa o el n?mero interno ya est?n registrados.") from error
+            raise ValueError("La placa o el número interno ya están registrados.") from error
         raise
     _invalidar_cache_lecturas()
 

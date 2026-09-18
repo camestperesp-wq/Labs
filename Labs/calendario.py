@@ -689,7 +689,7 @@ def mostrar_calendario_interactivo(dia_seleccionado):
         unsafe_allow_html=True,
     )
 
-    st.subheader(f"?? Ocupación para {dia_seleccionado}")
+    st.subheader(f"Ocupación para {dia_seleccionado}")
     hoy = datetime.now().date()
     lunes = st.session_state.labs_semana_inicio
     idx = DIAS.index(dia_seleccionado)
@@ -862,7 +862,7 @@ def mostrar_detalle_celda():
 
     df = res.get_reservas_fecha_lab_hora(fecha_str, lab, hora)
 
-    titulo = f"?? Detalle - {LABS_NAMES[lab]} {hora} {formatear_fecha_espanol(fecha_str)}"
+    titulo = f"Detalle - {LABS_NAMES[lab]} {hora} {formatear_fecha_espanol(fecha_str)}"
     if es_profesor_asistio and profesor_data:
         estado = profesor_data.get("estado", "")
         if estado == "Si":
@@ -1307,7 +1307,7 @@ def _inyectar_estilo_boton_celda(marker_id, estilo):
         <style id="{marker_id}">
             div[data-testid="stElementContainer"]:has(style#{marker_id}) + div[data-testid="stElementContainer"] button {{
                 background: {estilo["background"]} !important;
-                height: auto !important;
+                height: 215px !important;
                 min-height: 215px !important;
                 border: 2px solid {estilo["border"]} !important;
                 border-radius: 4px !important;
@@ -1320,6 +1320,9 @@ def _inyectar_estilo_boton_celda(marker_id, estilo):
                 color: {estilo["color"]} !important;
                 box-shadow: {estilo["shadow"]} !important;
                 overflow: hidden !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
                 overflow-wrap: anywhere !important;
                 word-break: break-word !important;
                 cursor: pointer !important;
@@ -1497,6 +1500,23 @@ def mostrar_calendario_interactivo(dia_seleccionado):
                 background:#f7f4ef; box-shadow:0 6px 14px rgba(34,30,31,0.10);
             }
 
+            div[data-testid="stHorizontalBlock"]:has(.reserva-native-time) {
+                align-items: stretch !important;
+            }
+            div[data-testid="stHorizontalBlock"]:has(.reserva-native-time) > div[data-testid="column"] {
+                display: flex !important;
+                flex-direction: column !important;
+                align-self: stretch !important;
+            }
+            div[data-testid="stHorizontalBlock"]:has(.reserva-native-time) > div[data-testid="column"] > div,
+            div[data-testid="stHorizontalBlock"]:has(.reserva-native-time) > div[data-testid="column"] div[data-testid="stElementContainer"] {
+                height: 100% !important;
+            }
+            div[data-testid="stHorizontalBlock"]:has(.reserva-native-time) button {
+                height: 215px !important;
+                min-height: 215px !important;
+                max-height: 215px !important;
+            }
             div[data-testid="column"] {
                 padding-left: 0 !important;
                 padding-right: 0 !important;

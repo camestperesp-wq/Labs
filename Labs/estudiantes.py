@@ -23,6 +23,14 @@ def normalizar_entrada_busqueda(valor):
     match = re.search(r'"nid"\s*:\s*"?(\d+)"?', texto)
     if match:
         return match.group(1)
+
+    # Algunas pistolas lectoras entregan el QR/codigo de barras con caracteres
+    # corruptos alrededor del documento, por ejemplo: [nid[?1011090672*.
+    # En esos casos se conserva solo la cedula para buscarla como documento.
+    if re.search(r"(?i)nid|[\[\]{}*\u00d1\u00f1]", texto):
+        numeros = re.findall(r"\d{6,10}", texto)
+        if numeros:
+            return numeros[0]
     return texto
 
 

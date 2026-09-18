@@ -138,7 +138,7 @@ def buscar_estudiantes(termino):
     termino = est.normalizar_entrada_busqueda(termino)
     return db.fetch_df(query, (f'%{termino}%', f'%{termino}%', f'%{termino}%'))
 
-def agregar_multa(codigo, fecha_multa, motivo, sancion, tecnico_asigna):
+def agregar_multa(codigo, fecha_multa, motivo, sancion, tecnico_asigna, observaciones=""):
     """
     Agrega una nueva multa para un estudiante.
     La multa se crea con estado 'pagado = NO' (activa).
@@ -146,10 +146,10 @@ def agregar_multa(codigo, fecha_multa, motivo, sancion, tecnico_asigna):
     codigo = est.resolver_codigo(codigo)
     query = """
         INSERT INTO multas 
-        (codigo_estudiante, fecha_multa, motivo, sancion, tecnico_asigna, pagado)
-        VALUES (?, ?, ?, ?, ?, 'NO')
+        (codigo_estudiante, fecha_multa, motivo, sancion, tecnico_asigna, pagado, observaciones)
+        VALUES (?, ?, ?, ?, ?, 'NO', ?)
     """
-    db.ejecutar(query, (codigo, fecha_multa, motivo, sancion, tecnico_asigna))
+    db.ejecutar(query, (codigo, fecha_multa, motivo, sancion, tecnico_asigna, str(observaciones or "").strip()))
 
 
 def pagar_multa(id_multa, tecnico_recibe):

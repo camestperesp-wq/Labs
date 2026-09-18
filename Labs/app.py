@@ -693,6 +693,8 @@ st.markdown("""
         .labs-summary {
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-auto-rows: 1fr;
+            align-items: stretch;
             gap: 0.75rem;
             margin: 1rem 0 1rem 0;
         }
@@ -703,6 +705,11 @@ st.markdown("""
             border-radius: 8px;
             padding: 0.78rem 0.95rem;
             box-shadow: 0 8px 20px rgba(23, 32, 42, 0.055);
+            min-height: 86px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
 
         .labs-summary-item strong {
@@ -1105,7 +1112,7 @@ st.markdown(
             <details class="labs-user-menu">
                 <summary aria-label="Menu de usuario">☰</summary>
                 <div class="labs-user-menu-panel">
-                    <a href="/logout" target="_self">Cerrar sesi?n</a>
+                    <a href="/logout" target="_self">Cerrar sesión</a>
                 </div>
             </details>
         </aside>
@@ -1143,7 +1150,12 @@ st.components.v1.html(
                 if (parsed && parsed.nid !== undefined) return String(parsed.nid).replace(/\\D/g, "");
             } catch (error) {}
             const match = text.match(/"nid"\\s*:\\s*"?(\\d+)"?/i);
-            return match ? match[1] : text;
+            if (match) return match[1];
+            if (/nid|[\\[\\]{}*\u00d1\u00f1]/i.test(text)) {
+                const dirtyMatch = text.match(/\\d{6,10}/);
+                if (dirtyMatch) return dirtyMatch[0];
+            }
+            return text;
         }
 
         if (window.parent.__labsScannerCleanup) {

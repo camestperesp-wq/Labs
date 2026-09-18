@@ -47,12 +47,12 @@ class PrestamosPasillosTest(unittest.TestCase):
         prestamos.registrar_equipo("", "Cable HDMI", "", consumible=True)
         equipo_id = int(prestamos.obtener_equipos(True).iloc[0]["id"])
 
-        prestamos.crear_prestamo([equipo_id], "20249999", "Camilo P?rez")
+        prestamos.crear_prestamo([equipo_id], "20249999", "Camilo Pérez")
         disponibles = prestamos.listar_equipos(solo_disponibles=True)
         self.assertIn(equipo_id, disponibles["id"].tolist())
         self.assertEqual(disponibles.loc[disponibles["id"] == equipo_id, "estado"].iloc[0], "Consumible")
 
-        segundo_prestamo = prestamos.crear_prestamo([equipo_id], "20248888", "Camilo P?rez")
+        segundo_prestamo = prestamos.crear_prestamo([equipo_id], "20248888", "Camilo Pérez")
         self.assertIsInstance(segundo_prestamo, int)
 
     def test_fpga_renovacion_tardia_genera_multa(self):

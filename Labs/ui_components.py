@@ -1005,7 +1005,8 @@ def mostrar_formulario_agregar_multa(codigo):
                     fecha_multa.strftime("%Y-%m-%d"), 
                     motivo, 
                     sancion, 
-                    tecnico_asigna
+                    tecnico_asigna,
+                    observaciones
                 )
                 st.success(" Multa agregada correctamente")
                 st.rerun()
@@ -1189,6 +1190,8 @@ def mostrar_deudores():
             .deudores-summary {
                 display: grid;
                 grid-template-columns: repeat(3, minmax(0, 1fr));
+                grid-auto-rows: 1fr;
+                align-items: stretch;
                 gap: 0.85rem;
                 margin: 0.75rem 0 1rem 0;
             }
@@ -1199,6 +1202,11 @@ def mostrar_deudores():
                 border-radius: 8px;
                 padding: 0.85rem 1rem;
                 box-shadow: 0 6px 18px rgba(43,31,20,0.06);
+                min-height: 84px;
+                height: 100%;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
             }
             .deudores-card strong {
                 display: block;
@@ -1444,6 +1452,7 @@ def mostrar_deudores():
                         with col_b:
                             motivo = seleccionar_motivo_multa("directa_motivo_multa")
                             sancion = st.text_input("Sancion", key="directa_sancion_multa")
+                        observaciones = st.text_area("Observaciones", key="directa_observaciones_multa", height=90)
 
                         guardar_multa = st.button("Guardar multa", key="guardar_multa_directa")
 
@@ -1459,6 +1468,7 @@ def mostrar_deudores():
                                 motivo.strip(),
                                 sancion.strip(),
                                 tecnico_asigna,
+                                observaciones.strip(),
                             )
                             st.session_state.deudor_mostrar_nueva_multa = False
                             st.success("Multa agregada correctamente.")
@@ -1595,12 +1605,19 @@ def mostrar_deudores():
             mostrar_perfil_estudiante(codigo)
 
     elif search_term and len(df_filtrado) > 1:
-        st.info(f"Se encontraron {len(df_filtrado)} estudiantes con multas activas.")
-        for _, row in df_pagina.iterrows():
-            codigo = row["codigo_estudiante"]
-            if st.button(f"Ver historial de {row['nombres']}", key=f"btn_historial_{codigo}"):
-                with st.expander(f"{row['nombres']} ({codigo})", expanded=True):
-                    mostrar_perfil_estudiante(codigo)
+        st.info(f"Se encontraron {len(df_filtrado)} estudiantes con multas activas. Ajusta la búsqueda para abrir un historial específico.")
+        resultados = df_pagina.rename(columns={
+            "codigo_estudiante": "Código",
+            "nombres": "Estudiante",
+            "carrera": "Proyecto curricular",
+            "numero_multas": "Multas activas",
+        })
+        columnas_resultado = [col for col in ["Código", "Estudiante", "Proyecto curricular", "Multas activas"] if col in resultados.columns]
+        st.dataframe(
+            resultados[columnas_resultado],
+            hide_index=True,
+            use_container_width=True,
+        )
 
     elif df_deudores.empty:
         st.info("No hay deudores. Usa el buscador para gestionar multas de estudiantes especificos.")

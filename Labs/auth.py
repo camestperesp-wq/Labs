@@ -100,8 +100,8 @@ def require_login():
             unsafe_allow_html=True,
         )
         st.title("Laboratorios ? Universidad Distrital")
-        st.info("La sesi?n no est? activa. Redirigiendo al inicio de sesi?n...")
-        st.link_button("Iniciar sesi?n", "/login")
+        st.info("La sesión no está activa. Redirigiendo al inicio de sesión...")
+        st.link_button("Iniciar sesión", "/login")
         st.stop()
     return user[0]
 

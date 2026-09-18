@@ -5,6 +5,7 @@ import estudiantes as est
 from utils import generar_multa
 from constants import LABORATORIOS, LABS_NAMES
 import streamlit as st
+from datetime import datetime
 
 
 CLAVE_INTERCAMBIOS_RESERVAS = "intercambios_reservas_por_fecha"
@@ -310,9 +311,11 @@ def buscar_reservas_persona(termino):
                                 AND upper(trim(coalesce(m.pagado, 'NO'))) = 'NO'
                             ) AS multas_activas
                        FROM reservas r
-                       WHERE (r.codigo LIKE ? OR r.codigo=?) AND r.activo=1
-                       ORDER BY r.fecha DESC, r.hora ASC""",
-                    (f'%{termino}%', codigo))
+                       WHERE r.codigo=?
+                         AND r.activo=1
+                         AND (r.asiste IS NULL OR trim(r.asiste)='')
+                       ORDER BY r.fecha ASC, r.hora ASC, r.laboratorio ASC, r.banco ASC""",
+                    (codigo,))
     return aplicar_intercambios_busqueda(df)
 
 def get_reporte_completo(fecha_desde, fecha_hasta):
