@@ -56,16 +56,14 @@ def fresh_form(request, action, message="", status_code=200):
     response = form_page(action, csrf, message)
     response.status_code = status_code
     response.set_cookie("labs_csrf", csrf, httponly=True,
-                        secure=request.url.scheme == "https", samesite="strict",
+                        secure=False, samesite="strict",
                         max_age=auth.TTL_SECONDS, path="/")
     return response
 
 
 async def access(request):
     action = request.url.path.strip("/")
-    secure = request.url.scheme == "https"
-    if not secure and request.url.hostname not in ("localhost", "127.0.0.1", "::1"):
-        return Response("El acceso por red requiere HTTPS.", status_code=400)
+    
     if request.method == "GET":
         return fresh_form(request, action)
     body = bytearray()
@@ -90,7 +88,7 @@ async def access(request):
         return fresh_form(request, action, "Acceso no válido o temporalmente bloqueado. Intente nuevamente.")
     response = RedirectResponse("/", status_code=303)
     response.set_cookie(auth.COOKIE, token, max_age=auth.TTL_SECONDS, httponly=True,
-                        secure=secure, samesite="strict", path="/")
+                        secure=False, samesite="strict", path="/")
     return response
 
 
