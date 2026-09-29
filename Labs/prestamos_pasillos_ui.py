@@ -1,3 +1,4 @@
+import auth
 """Vista Streamlit del módulo Préstamos de Pasillos."""
 
 from datetime import datetime, timedelta
@@ -22,6 +23,7 @@ def _mostrar_metricas_globales():
 
 @st.fragment
 def _mostrar_inventario():
+    auth.require_section("prestamos")
     st.markdown("#### Inventario de equipos")
     mensaje = st.session_state.pop("pasillos_flash_inventario", None)
     if mensaje:
@@ -71,6 +73,9 @@ def _mostrar_inventario():
                 except ValueError as error:
                     st.error(str(error))
 
+    termino = st.text_input("Buscar por nombre de equipo o consumible", key="buscar_inventario").strip()
+    if termino:
+        inventario = inventario[inventario["nombre"].str.contains(termino, case=False, regex=False, na=False)]
     if inventario.empty:
         st.info("Aún no hay equipos registrados.")
     else:
@@ -108,6 +113,7 @@ def _mostrar_inventario():
 
 @st.fragment
 def _mostrar_nuevo_prestamo():
+    auth.require_section("prestamos")
     st.markdown("#### Registrar salida")
     mensaje = st.session_state.pop("pasillos_flash_salida", None)
     if mensaje:
@@ -147,6 +153,19 @@ def _mostrar_nuevo_prestamo():
         placeholder='Ingresa codigo, cedula o {"nid":1011090672}',
     )
     codigo_solicitante = est.normalizar_entrada_busqueda(codigo_solicitante)
+    busqueda_nombre = st.text_input("Buscar solicitante por nombre", key=f"pasillos_nombre_{version}").strip()
+    if busqueda_nombre:
+        import multas
+        coincidencias = multas.buscar_estudiantes(busqueda_nombre)
+        opciones = dict(zip(coincidencias.codigo, coincidencias.nombres))
+        if opciones:
+            codigo_solicitante = st.selectbox(
+                "Seleccionar solicitante", list(opciones),
+                format_func=lambda codigo: f"{opciones[codigo]} ({codigo})",
+                key=f"pasillos_usuario_{version}",
+            )
+        else:
+            st.info("No se encontraron usuarios con ese nombre.")
     solicitante = prestamos.obtener_solicitante(codigo_solicitante)
     if codigo_solicitante and solicitante:
         st.markdown(f"**Solicitante:** {solicitante['nombres']}")
@@ -198,6 +217,7 @@ def _mostrar_nuevo_prestamo():
 
 @st.fragment
 def _mostrar_devoluciones():
+    auth.require_section("prestamos")
     st.markdown("#### Registrar devolución")
     mensaje = st.session_state.pop("pasillos_flash_devolucion", None)
     if mensaje:
@@ -206,6 +226,9 @@ def _mostrar_devoluciones():
     if activos.empty:
         st.info("No hay préstamos activos.")
         return
+    termino = st.text_input("Buscar por usuario, código o nombre del consumible/equipo", key="buscar_devoluciones").strip()
+    if termino:
+        activos = activos[activos[["solicitante_nombre", "solicitante", "equipos"]].fillna("").astype(str).apply(lambda col: col.str.contains(termino, case=False, regex=False)).any(axis=1)]
     tecnicos = ["Seleccionar", *prestamos.obtener_tecnicos()]
     ahora = datetime.now()
     for _, detalle in activos.iterrows():
@@ -229,12 +252,12 @@ def _mostrar_devoluciones():
             st.write(f"**Fecha y hora de salida:** {detalle['fecha_salida']}")
             if es_fpga:
                 st.write(
-                    f"**Límite FPGA:** {detalle['limite_fpga']} · "
+                    f"**Límite Artix:** {detalle['limite_fpga']} · "
                     f"tolerancia hasta {limite_gracia.strftime('%Y-%m-%d %H:%M:%S')}"
                 )
             if fpga_vencida:
                 retraso = int((ahora - limite_gracia).total_seconds() // 60)
-                st.error(f"Tiempo FPGA vencido por {prestamos._formatear_retraso(retraso)}.")
+                st.error(f"Tiempo Artix vencido por {prestamos._formatear_retraso(retraso)}.")
             if dia_vencido:
                 st.error("El préstamo no fue devuelto el mismo día.")
             if not fpga_vencida and not dia_vencido:
@@ -244,8 +267,8 @@ def _mostrar_devoluciones():
                 receptor = st.selectbox("Técnico responsable *", tecnicos)
                 detalle_multa = st.text_area(
                     "Registro de la multa por retraso *",
-                    disabled=not fpga_vencida,
-                    help="La multa no es monetaria y debe ser documentada por el técnico.",
+                    disabled=not (fpga_vencida or dia_vencido),
+                    help="Al completar este campo y confirmar la devolución o renovación, aplicas la multa manualmente. Para Artix vencido el registro es obligatorio.",
                 )
                 observaciones = st.text_area("Observaciones de entrada", height=80)
                 acciones = st.columns(2) if es_fpga else [st.container()]
@@ -260,7 +283,7 @@ def _mostrar_devoluciones():
                             prestamos.renovar_prestamo_fpga(
                                 prestamo_id, receptor, detalle_multa=detalle_multa
                             )
-                            st.session_state.pasillos_flash_devolucion = "Préstamo FPGA renovado por dos horas."
+                            st.session_state.pasillos_flash_devolucion = "Préstamo Artix renovado por dos horas."
                         else:
                             prestamos.registrar_devolucion(
                                 prestamo_id, receptor, observaciones,
@@ -274,6 +297,7 @@ def _mostrar_devoluciones():
 
 @st.fragment
 def _mostrar_historial():
+    auth.require_section("prestamos")
     st.markdown("#### Historial de préstamos")
     filtro = st.selectbox(
         "Estado",

@@ -56,7 +56,7 @@ class PrestamosPasillosTest(unittest.TestCase):
         self.assertIsInstance(segundo_prestamo, int)
 
     def test_fpga_renovacion_tardia_genera_multa(self):
-        prestamos.registrar_equipo("FP-1", "Kit FPGA Nexys", "FP-I-1")
+        prestamos.registrar_equipo("FP-1", "Kit Artix Nexys", "FP-I-1")
         equipo_id = int(prestamos.obtener_equipos(True).iloc[0]["id"])
         prestamo_id = prestamos.crear_prestamo([equipo_id], "20249999", "Camilo Pérez")
         limite_vencido = (datetime.now() - timedelta(minutes=25)).isoformat(sep=" ", timespec="seconds")
@@ -79,11 +79,11 @@ class PrestamosPasillosTest(unittest.TestCase):
             ("20249999",), fetch=True,
         )[0]
         self.assertIn("No renov", multa_general[0])
-        self.assertIn("Retraso FPGA", multa_general[1])
+        self.assertIn("Retraso Artix", multa_general[1])
         self.assertEqual(multa_general[2], "NO")
 
     def test_fpga_dentro_de_tolerancia_no_genera_multa(self):
-        prestamos.registrar_equipo("FP-2", "FPGA Basys", "FP-I-2")
+        prestamos.registrar_equipo("FP-2", "Artix Basys", "FP-I-2")
         equipo_id = int(prestamos.obtener_equipos(True).iloc[0]["id"])
         prestamo_id = prestamos.crear_prestamo([equipo_id], "20247777", "Camilo Pérez")
         limite = (datetime.now() - timedelta(minutes=10)).isoformat(sep=" ", timespec="seconds")
@@ -125,7 +125,7 @@ class PrestamosPasillosTest(unittest.TestCase):
         self.assertEqual(estado, "PAGADA")
 
     def _crear_fpga_vencida_con_multa(self, codigo):
-        prestamos.registrar_equipo("", f"FPGA {codigo}", f"FP-{codigo}")
+        prestamos.registrar_equipo("", f"Artix {codigo}", f"FP-{codigo}")
         equipo_id = int(prestamos.obtener_equipos(True).iloc[0]["id"])
         prestamo_id = prestamos.crear_prestamo([equipo_id], codigo, "Camilo PÃ©rez")
         limite_vencido = (datetime.now() - timedelta(minutes=25)).isoformat(sep=" ", timespec="seconds")
@@ -150,7 +150,7 @@ class PrestamosPasillosTest(unittest.TestCase):
         salida_ayer = (datetime.now() - timedelta(days=1)).isoformat(sep=" ", timespec="seconds")
         db.ejecutar("UPDATE prestamos_pasillo SET fecha_salida=? WHERE id=?", (salida_ayer, prestamo_id))
 
-        prestamos.registrar_devolucion(prestamo_id, "Camilo Pérez", monto_pago=3000)
+        prestamos.registrar_devolucion(prestamo_id, "Camilo Pérez", monto_pago=3000, detalle_multa="Devolución tardía confirmada")
         alertas = prestamos.obtener_alertas_bloqueo("20247777")
         self.assertTrue(any("mismo día" in alerta for alerta in alertas))
 

@@ -1,3 +1,4 @@
+import auth
 import streamlit as st
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -148,6 +149,7 @@ def formatear_etiqueta_horario(horario):
 # ==================== CALENDARIO INTERACTIVO ====================
 
 def mostrar_calendario_interactivo(dia_seleccionado):
+    auth.require_section("reservas")
     """
     Muestra la ocupaciÃ³n de TODOS los laboratorios para un dÃ­a especÃ­fico.
     El dÃ­a se selecciona mediante un radio button en app.py.
@@ -652,6 +654,7 @@ def mostrar_formulario_asistencia_docente():
 # ==================== OVERRIDE LIMPIO ====================
 
 def mostrar_calendario_interactivo(dia_seleccionado):
+    auth.require_section("reservas")
     """
     Calendario de reserva uniforme, sin colores ni leyendas por estado.
     """
@@ -1365,6 +1368,7 @@ def _inyectar_estilo_boton_celda(marker_id, estilo):
 
 @st.fragment
 def mostrar_calendario_interactivo(dia_seleccionado):
+    auth.require_section("reservas")
     """
     Grilla de reserva con botones nativos para abrir el modal sin navegar.
     """
@@ -1569,6 +1573,7 @@ def mostrar_calendario_interactivo(dia_seleccionado):
 
     @st.dialog("Intercambiar espacio")
     def mostrar_intercambio_reserva():
+        auth.require_section("reservas")
         origen = st.session_state.get("intercambio_reserva_origen")
         if not origen or origen.get("fecha") != fecha_str:
             st.info("La celda seleccionada no pertenece al día visible.")
@@ -1953,6 +1958,10 @@ def _render_detalle_celda_contenido():
     fecha_str = data["fecha"]
     hora = data["hora"]
     lab = data["laboratorio"]
+    # Recalcular tras marcar asistencia: el modal no debe conservar cupos ocupados obsoletos.
+    estado = _obtener_estado_celda(parse_fecha_a_espanol(fecha_str), lab, fecha_str, hora)
+    data = _datos_celda_seleccionada(lab, fecha_str, hora, estado)
+    st.session_state.labs_celda_seleccionada = data
     ocupados = data["ocupados"]
     total = data["total"]
     disponibles = data["disponibles"]
@@ -2030,7 +2039,8 @@ def _render_detalle_celda_contenido():
         acciones.append("Asistencia docente")
     if puede_reservar_individual:
         acciones.append("Reserva Individual")
-    if (not es_asignatura or es_adicional) and not es_profesor_asistio and df.empty:
+    sin_reservas_ocupantes = df.empty or df["asiste"].eq("No").all()
+    if (not es_asignatura or es_adicional or es_profesor_no_asistio) and not es_profesor_asistio and sin_reservas_ocupantes:
         acciones.append("Reserva Docente")
 
     if acciones:
@@ -2088,6 +2098,7 @@ def mostrar_detalle_celda():
     if hasattr(st, "dialog"):
         @st.dialog(titulo, width="large", on_dismiss=_cerrar_detalle_celda_por_dismiss)
         def detalle_dialog():
+            auth.require_section("reservas")
             _render_detalle_celda_contenido()
 
         detalle_dialog()

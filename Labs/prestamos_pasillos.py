@@ -238,7 +238,7 @@ def _formatear_retraso(minutos):
 
 
 def _crear_multa_prestamo(conn, prestamo_id, codigo, tipo, motivo, incidente,
-                           referencia, retraso_minutos, monto_pago=0, tecnico=None):
+                           referencia, retraso_minutos, monto_pago=0, tecnico=None, observaciones=""):
     cursor = conn.execute(
         """INSERT OR IGNORE INTO multas_prestamos
            (prestamo_id, codigo_estudiante, tipo, motivo, fecha_incidente,
@@ -255,7 +255,7 @@ def _crear_multa_prestamo(conn, prestamo_id, codigo, tipo, motivo, incidente,
         )
     if cursor.rowcount:
         sancion = (
-            f"Retraso FPGA de {_formatear_retraso(retraso_minutos)}"
+            f"Retraso Artix de {_formatear_retraso(retraso_minutos)}"
             if tipo == "FPGA_RETRASO"
             else f"Retraso de prestamo de {_formatear_retraso(retraso_minutos)}"
         )
@@ -269,7 +269,7 @@ def _crear_multa_prestamo(conn, prestamo_id, codigo, tipo, motivo, incidente,
                 motivo,
                 sancion,
                 tecnico or "",
-                f"Prestamo de pasillo #{prestamo_id}. Limite: {referencia}",
+                f"Prestamo de pasillo #{prestamo_id}. Limite: {referencia}\n{observaciones}".strip(),
             ),
         )
     return cursor.rowcount
@@ -281,13 +281,13 @@ def _registrar_incumplimientos(conn, prestamo, momento, monto_pago=0, tecnico=No
     salida = datetime.fromisoformat(fecha_salida)
     incidente = momento.isoformat(sep=" ", timespec="seconds")
     creadas = 0
-    if momento.date() > salida.date():
+    if tecnico and str(detalle_multa or "").strip() and momento.date() > salida.date():
         limite_dia = datetime.combine(salida.date(), datetime.max.time()).replace(microsecond=0)
         retraso = int((momento - limite_dia).total_seconds() // 60)
         creadas += _crear_multa_prestamo(
             conn, prestamo_id, codigo, "DEVOLUCION_DIA_SIGUIENTE",
             "No devolvió el equipo el mismo día", incidente,
-            limite_dia.isoformat(sep=" "), retraso, monto_pago, tecnico,
+            limite_dia.isoformat(sep=" "), retraso, monto_pago, tecnico, str(detalle_multa).strip(),
         )
     if limite_fpga:
         limite = datetime.fromisoformat(limite_fpga)
@@ -300,7 +300,7 @@ def _registrar_incumplimientos(conn, prestamo, momento, monto_pago=0, tecnico=No
             creadas += _crear_multa_prestamo(
                 conn, prestamo_id, codigo, "FPGA_RETRASO",
                 f"No renovó a tiempo — {detalle}", incidente,
-                limite_con_gracia.isoformat(sep=" "), retraso, 0, tecnico,
+                limite_con_gracia.isoformat(sep=" "), retraso, 0, tecnico, detalle,
             )
     return creadas
 
@@ -328,7 +328,7 @@ def crear_prestamo(equipos_ids, solicitante, tecnico_entrega, observaciones_sali
         ).fetchall()
         if {fila[0] for fila in disponibles} != set(ids):
             raise ValueError("Uno o más equipos ya no están disponibles.")
-        contiene_fpga = any("FPGA" in str(fila[1]).upper() for fila in disponibles)
+        contiene_fpga = any("ARTIX" in str(fila[1]).upper() for fila in disponibles)
         limite_fpga = (datetime.fromisoformat(fecha_salida) + timedelta(hours=2)).isoformat(
             sep=" ", timespec="seconds"
         ) if contiene_fpga else None
@@ -384,7 +384,7 @@ def renovar_prestamo_fpga(prestamo_id, tecnico, monto_pago=0, detalle_multa=""):
             (int(prestamo_id),),
         ).fetchone()
         if not prestamo or not prestamo[3]:
-            raise ValueError("El préstamo no corresponde a una FPGA activa.")
+            raise ValueError("El préstamo no corresponde a un Artix activo.")
         _registrar_incumplimientos(conn, prestamo, momento, 0, tecnico, detalle_multa, True)
         nuevo_limite = (momento + timedelta(hours=2)).isoformat(sep=" ", timespec="seconds")
         conn.execute(
@@ -397,19 +397,8 @@ def renovar_prestamo_fpga(prestamo_id, tecnico, monto_pago=0, detalle_multa=""):
 
 
 def sincronizar_incumplimientos():
-    """Materializa faltas de cambio de día; la multa FPGA la documenta el técnico."""
-    momento = datetime.now()
-    with db.get_connection() as conn:
-        activos = conn.execute(
-            "SELECT id, solicitante, fecha_salida, limite_fpga FROM prestamos_pasillo WHERE estado='PRESTADO'"
-        ).fetchall()
-        creadas = sum(
-            _registrar_incumplimientos(conn, prestamo, momento, registrar_fpga=False)
-            for prestamo in activos
-        )
-        conn.commit()
-    if creadas:
-        _invalidar_cache_lecturas()
+    """Compatibilidad: los retrasos se muestran en devoluciones para revisión manual."""
+    return 0  # Las consultas nunca generan sanciones.
 
 
 @st.cache_data(ttl=CACHE_TTL_SEGUNDOS, show_spinner=False)
@@ -431,7 +420,7 @@ def obtener_prestamos(estado=None):
                        e.nombre
                        || CASE WHEN e.placa IS NULL OR trim(e.placa)=''
                                THEN '' ELSE ' · Placa ' || e.placa END
-                       || ' · Interno ' || e.numero_interno,
+                       || CASE WHEN coalesce(e.numero_interno, '')='' THEN '' ELSE ' · Interno ' || e.numero_interno END,
                        ' | '
                    ) AS equipos,
                    COUNT(e.id) AS cantidad_equipos
@@ -483,7 +472,7 @@ def obtener_prestamos_activos_codigo(codigo):
                           e.nombre
                           || CASE WHEN e.placa IS NULL OR trim(e.placa)=''
                                   THEN '' ELSE ' · Placa ' || e.placa END
-                          || ' · Interno ' || e.numero_interno,
+                          || CASE WHEN coalesce(e.numero_interno, '')='' THEN '' ELSE ' · Interno ' || e.numero_interno END,
                           ' | '
                       ) AS equipos,
                       COUNT(e.id) AS cantidad_equipos

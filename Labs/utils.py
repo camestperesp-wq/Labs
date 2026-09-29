@@ -27,43 +27,8 @@ def generar_multa(lab, fecha, hora):
 
 
 def actualizar_reservas_vencidas():
-    hoy = datetime.now().date().strftime("%Y-%m-%d")
-    fecha_hoy = hoy
-
-    with db.get_connection() as conn:
-        c = conn.cursor()
-        c.execute("""
-            SELECT id, laboratorio, fecha, hora, codigo
-            FROM reservas
-            WHERE fecha < ?
-            AND activo = 1
-            AND (asiste IS NULL OR asiste = '')
-        """, (hoy,))
-        rows = c.fetchall()
-
-        for id_res, lab, fecha, hora, codigo in rows:
-            if codigo == "PROFESOR":
-                c.execute("UPDATE reservas SET asiste = 'No' WHERE id = ?", (id_res,))
-                continue
-
-            c.execute("SELECT nombres FROM estudiantes WHERE codigo = ?", (codigo,))
-            estudiante = c.fetchone()
-            if estudiante:
-                motivo = f"No asistió a {lab} - {fecha} {hora}"
-                c.execute("""
-                    INSERT INTO multas
-                    (codigo_estudiante, fecha_multa, motivo, sancion, tecnico_asigna, pagado)
-                    VALUES (?, ?, ?, ?, ?, 'NO')
-                """, (codigo, fecha_hoy, motivo, "", "Sistema (vencida)"))
-
-            c.execute("UPDATE reservas SET asiste = 'No' WHERE id = ?", (id_res,))
-
-        conn.commit()
-
-    if rows:
-        db.clear_cache()
-
-    return len(rows)
+    """Compatibilidad: los vencimientos se revisan en el módulo de alertas."""
+    return 0
 
 
 def parse_fecha_a_espanol(fecha_str):

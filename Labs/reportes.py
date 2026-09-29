@@ -8,6 +8,8 @@ from constants import LABORATORIOS, HORAS, LABS_NAMES
 import reservas as res
 import prestamos_pasillos as prestamos_pasillos_data
 import estudiantes as est
+import database as db
+import multas
 from ui_components import render_editor_asistencias
 from exportaciones import crear_excel_institucional as _crear_excel_institucional
 
@@ -70,11 +72,11 @@ def mostrar_consulta_fecha_lab():
             _render_editor_paginado(df, "labs_fecha_lab", params["lab"])
 
 def mostrar_busqueda_codigo():
-    st.subheader("Buscar por codigo, cedula o QR")
+    st.subheader("Buscar por nombre, código, cédula o QR")
     with st.form("form_buscar_codigo", border=False):
         buscar_col, boton_col = st.columns([5, 1], vertical_alignment="bottom")
         with buscar_col:
-            termino = st.text_input("Codigo, cedula o QR", key="labs_termino_persona")
+            termino = st.text_input("Nombres y apellidos, código, cédula o QR", key="labs_termino_persona")
         with boton_col:
             buscar = st.form_submit_button("Buscar", use_container_width=True)
 
@@ -89,6 +91,16 @@ def mostrar_busqueda_codigo():
 
     if "labs_codigo_busqueda" in st.session_state:
         termino = st.session_state.labs_codigo_busqueda
+        coincidencias = est.buscar_personas(termino)
+        exactas = coincidencias[(coincidencias.codigo == termino) | (coincidencias.documento == termino)]
+        if not exactas.empty:
+            termino = str(exactas.iloc[0].codigo)
+        elif not coincidencias.empty:
+            opciones = dict(zip(coincidencias.codigo, coincidencias.nombres))
+            termino = st.selectbox("Usuario encontrado", list(opciones),
+                                   format_func=lambda codigo: f"{opciones[codigo]} ({codigo})",
+                                   key=f"usuario_reserva_{termino}")
+        historial_multas = multas.obtener_multas_estudiante(termino)
         prestamos_activos = prestamos_pasillos_data.obtener_prestamos_activos_codigo(termino)
         df_persona = res.buscar_reservas_persona(termino)
         solicitante = prestamos_pasillos_data.obtener_solicitante(termino)
@@ -103,7 +115,7 @@ def mostrar_busqueda_codigo():
 
         if nombre:
             st.success(f"Usuario verificado: {nombre}")
-        elif df_persona.empty and prestamos_activos.empty:
+        elif df_persona.empty and prestamos_activos.empty and historial_multas.empty:
             st.info("No se encontraron datos para el código consultado.")
             return
 
@@ -120,14 +132,11 @@ def mostrar_busqueda_codigo():
         )
 
         st.subheader("Multas activas")
-        multas_activas = (
-            int(pd.to_numeric(df_persona["multas_activas"], errors="coerce").fillna(0).max())
-            if not df_persona.empty else 0
-        )
+        multas_activas = int(historial_multas["pagado"].eq("NO").sum())
         if multas_activas:
             st.warning(f"El usuario tiene {multas_activas} multa(s) activa(s).")
-            destino_deudores = "?" + urlencode({
-                "modulo": "deudores", "codigo_deudor": termino,
+            destino_deudores = "/deudores?" + urlencode({
+                "codigo_deudor": termino,
             })
             st.markdown(
                 f'<a href="{destino_deudores}" target="_self">Ver detalle en Deudores</a>',
@@ -135,6 +144,14 @@ def mostrar_busqueda_codigo():
             )
         else:
             st.caption("Sin multas activas registradas.")
+
+        if not historial_multas.empty:
+            st.subheader("Historial de multas")
+            st.dataframe(historial_multas[["fecha_multa", "motivo", "sancion", "observaciones", "pagado", "fecha_pago", "tecnico_asigna"]].rename(columns={
+                "fecha_multa": "Fecha", "motivo": "Motivo", "sancion": "Sanción",
+                "observaciones": "Observaciones", "pagado": "Pagado", "fecha_pago": "Fecha de pago",
+                "tecnico_asigna": "Técnico",
+            }), hide_index=True, width="stretch")
 
         resumen = pd.DataFrame()
         if not df_persona.empty:
@@ -199,8 +216,7 @@ def mostrar_busqueda_codigo():
                     detalle_col.markdown(
                         f"**{prestamo['equipos']}**  \nSalida: {prestamo['fecha_salida']}"
                     )
-                    destino = "?" + urlencode({
-                        "modulo": "prestamos_pasillos",
+                    destino = "/prestamos?" + urlencode({
                         "prestamo_id": int(prestamo["id"]),
                         "codigo_prestamo": str(prestamo["solicitante"]),
                     })

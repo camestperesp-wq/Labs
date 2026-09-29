@@ -76,7 +76,8 @@ def obtener_multas_estudiante(codigo):
         WHERE codigo_estudiante = ?
         ORDER BY fecha_multa DESC
     """
-    return db.fetch_df(query, (codigo,))
+    with db.get_connection() as conn:
+        return pd.read_sql_query(query, conn, params=(codigo,))
 
 
 def obtener_multas_activas_estudiante(codigo):
@@ -85,7 +86,7 @@ def obtener_multas_activas_estudiante(codigo):
     """
     codigo = est.resolver_codigo(codigo)
     query = """
-        SELECT id, fecha_multa, motivo, sancion, tecnico_asigna
+        SELECT id, fecha_multa, motivo, sancion, tecnico_asigna, observaciones
         FROM multas
         WHERE codigo_estudiante = ? AND pagado = 'NO'
         ORDER BY fecha_multa DESC
@@ -110,33 +111,9 @@ def obtener_texto_multas_activas(codigo):
 
 
 def buscar_estudiantes(termino):
-    """
-    Busca estudiantes por codigo o nombre, incluyendo codigos que solo existan en multas.
-    Retorna un DataFrame con codigo, nombres, proyecto y numero de multas activas.
-    """
-    query = """
-        SELECT
-            base.codigo,
-            base.nombres,
-            base.carrera,
-            (SELECT COUNT(*) FROM multas WHERE codigo_estudiante = base.codigo AND pagado = 'NO') as multas_activas
-        FROM (
-            SELECT codigo, nombres, proyecto as carrera, documento
-            FROM estudiantes
-            UNION
-            SELECT
-                m.codigo_estudiante as codigo,
-                coalesce(e.nombres, '') as nombres,
-                coalesce(e.proyecto, '') as carrera,
-                coalesce(e.documento, '') as documento
-            FROM multas m
-            LEFT JOIN estudiantes e ON m.codigo_estudiante = e.codigo
-        ) base
-        WHERE base.codigo LIKE ? OR base.nombres LIKE ? OR base.documento LIKE ?
-        ORDER BY base.nombres, base.codigo
-    """
-    termino = est.normalizar_entrada_busqueda(termino)
-    return db.fetch_df(query, (f'%{termino}%', f'%{termino}%', f'%{termino}%'))
+    """Busca por código, documento o todos los términos de nombres y apellidos."""
+    return est.buscar_personas(termino)
+
 
 def agregar_multa(codigo, fecha_multa, motivo, sancion, tecnico_asigna, observaciones=""):
     """
@@ -150,6 +127,7 @@ def agregar_multa(codigo, fecha_multa, motivo, sancion, tecnico_asigna, observac
         VALUES (?, ?, ?, ?, ?, 'NO', ?)
     """
     db.ejecutar(query, (codigo, fecha_multa, motivo, sancion, tecnico_asigna, str(observaciones or "").strip()))
+    _invalidar_cache_prestamos()
 
 
 def pagar_multa(id_multa, tecnico_recibe):

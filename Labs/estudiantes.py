@@ -9,6 +9,7 @@ import pandas as pd
 import database as db
 from datetime import datetime, timedelta
 from utils import normalizar_texto
+from busqueda import normalizar_busqueda
 
 
 CLAVES_DOCUMENTO = ("nid", "cc", "cedula", "c?dula", "documento", "identificacion", "identificaci?n", "nro_identificacion")
@@ -108,6 +109,36 @@ def buscar_estudiante(codigo):
     r = db.ejecutar("SELECT codigo, nombres, proyecto FROM estudiantes WHERE codigo=?", (codigo,), fetch=True)
     return r[0] if r else None
 
+
+def buscar_personas(termino):
+    """Busca todos los términos del nombre completo; conserva códigos sin ficha o reserva."""
+    termino = normalizar_entrada_busqueda(termino).strip()
+    tokens = normalizar_busqueda(termino).split()
+    if not tokens:
+        return pd.DataFrame(columns=["codigo", "nombres", "carrera", "documento", "multas_activas"])
+    nombres_sql = " AND ".join("instr(normalizar_busqueda(base.nombres), ?) > 0" for _ in tokens)
+    query = f"""WITH codigos AS (
+                    SELECT codigo FROM estudiantes
+                    UNION SELECT codigo FROM reservas WHERE codigo!='PROFESOR'
+                    UNION SELECT codigo_estudiante FROM multas
+                ), base AS (
+                    SELECT c.codigo,
+                           coalesce(nullif(trim(e.nombres), ''),
+                             (SELECT r.nombres FROM reservas r WHERE r.codigo=c.codigo
+                              AND trim(coalesce(r.nombres,''))!='' ORDER BY r.id DESC LIMIT 1), '') AS nombres,
+                           coalesce(e.proyecto, '') AS carrera,
+                           coalesce(e.documento, '') AS documento
+                    FROM codigos c LEFT JOIN estudiantes e ON e.codigo=c.codigo
+                )
+                SELECT base.*,
+                       (SELECT count(*) FROM multas m WHERE m.codigo_estudiante=base.codigo AND m.pagado='NO') AS multas_activas
+                FROM base
+                WHERE instr(base.codigo, ?) > 0 OR instr(base.documento, ?) > 0 OR ({nombres_sql})
+                ORDER BY base.nombres, base.codigo"""
+    # Lectura directa: los resultados financieros deben reflejar cualquier escritura confirmada.
+    with db.get_connection() as conn:
+        return pd.read_sql_query(query, conn, params=(termino, termino, *tokens))
+
 def contar_reservas_hoy(codigo):
     codigo = resolver_codigo(codigo)
     hoy = datetime.now().date().strftime("%Y-%m-%d")
@@ -179,6 +210,12 @@ def _renombrar_columnas_estudiantes(df):
         "NOMBRES": "nombres",
         "NOMBRE": "nombres",
         "NOMBREESTUDIANTE": "nombres",
+        "NOMBRECOMPLETO": "nombres",
+        "NOMBRESYAPELLIDOS": "nombres",
+        "APELLIDOS": "apellidos",
+        "APELLIDO": "apellidos",
+        "PRIMERAPELLIDO": "primer_apellido",
+        "SEGUNDOAPELLIDO": "segundo_apellido",
         "PROYECTO": "proyecto",
         "PROGRAMA": "proyecto",
         "PROYECTOCURRICULAR": "proyecto",
@@ -194,6 +231,12 @@ def _renombrar_columnas_estudiantes(df):
         if normalizada in aliases:
             renombradas[original] = aliases[normalizada]
     resultado = df.rename(columns=renombradas).copy()
+    if "nombres" in resultado.columns:
+        apellidos = (["apellidos"] if "apellidos" in resultado.columns else
+                     [c for c in ("primer_apellido", "segundo_apellido") if c in resultado.columns])
+        for columna in apellidos:
+            resultado["nombres"] = (resultado["nombres"].fillna("").astype(str).str.strip()
+                                    + " " + resultado[columna].fillna("").astype(str).str.strip()).str.strip()
     for columna in ("multas", "documento"):
         if columna not in resultado.columns:
             resultado[columna] = ""

@@ -8,6 +8,7 @@ import re
 import time
 from pathlib import Path
 from urllib.parse import parse_qs
+from routing import SECTIONS, can_access
 
 import streamlit as st
 from starlette.middleware import Middleware
@@ -108,6 +109,11 @@ class AuthenticationMiddleware:
             if scope["type"] == "websocket":
                 return await send({"type": "websocket.close", "code": 4401})
             return await RedirectResponse("/login", status_code=303)(scope, receive, send)
+        section = scope["path"].strip("/")
+        if section in SECTIONS and not can_access(user[2], section):
+            if scope["type"] == "websocket":
+                return await send({"type": "websocket.close", "code": 4403})
+            return await Response("Acceso denegado", status_code=403)(scope, receive, send)
         if scope["type"] == "websocket":
             async def authenticated_receive():
                 message = await receive()

@@ -994,6 +994,8 @@ def mostrar_formulario_agregar_multa(codigo):
             motivo = seleccionar_motivo_multa(f"perfil_motivo_{codigo}")
             sancion = st.text_input("Sanción")
         
+        observaciones = st.text_area("Observaciones", key=f"observaciones_multa_{codigo}")
+
         if st.button("Guardar multa", key=f"guardar_multa_{codigo}"):
             if not motivo:
                 st.error(" El motivo es obligatorio")
@@ -1050,6 +1052,7 @@ def mostrar_perfil_estudiante(codigo):
                     st.write(f" {m['motivo'] if m['motivo'] else 'Sin motivo'}")
                     if m['sancion']:
                         st.write(f" Sanción: {m['sancion']}")
+                    st.write(f"Observaciones: {m['observaciones'] or 'Sin observaciones'}")
                     st.caption(f" Asignada por: {m['tecnico_asigna']}")
                 
                 # Columna 2: Botones de acción
@@ -1115,12 +1118,13 @@ def mostrar_perfil_estudiante(codigo):
                             key=f"edit_sancion_{m['id']}"
                         )
                         
+                        nuevas_observaciones = st.text_area("Observaciones", value=m["observaciones"] or "", key=f"edit_obs_{m['id']}")
                         col_a, col_b = st.columns(2)
                         with col_a:
                             if st.button(f" Guardar", key=f"guardar_edit_{m['id']}"):
                                 db.ejecutar(
-                                    "UPDATE multas SET motivo = ?, sancion = ? WHERE id = ?",
-                                    (nuevo_motivo, nueva_sancion, m['id'])
+                                    "UPDATE multas SET motivo = ?, sancion = ?, observaciones = ? WHERE id = ?",
+                                    (nuevo_motivo, nueva_sancion, nuevas_observaciones.strip(), m['id'])
                                 )
                                 st.session_state[f"modificar_modal_{m['id']}"] = False
                                 st.rerun()
@@ -1157,6 +1161,7 @@ def mostrar_perfil_estudiante(codigo):
                 st.write(f" {m['motivo']}")
                 if m['sancion']:
                     st.write(f" Sanción: {m['sancion']}")
+                st.write(f"Observaciones: {m['observaciones'] or 'Sin observaciones'}")
                 st.caption(f" Recibido por: {m['tecnico_recibe']}")
                 st.divider()
 
@@ -1279,7 +1284,7 @@ def mostrar_deudores():
     with buscar_col:
         search_term = st.text_input(
             "Buscar estudiante",
-            placeholder="Buscar por nombre, cedula o codigo...",
+            placeholder="Buscar por nombres y apellidos, cédula o código...",
             key="deudor_search",
             on_change=reiniciar_paginas_deudores,
         )
@@ -1481,10 +1486,8 @@ def mostrar_deudores():
 
     search_term = est.normalizar_entrada_busqueda(search_term)
     if search_term:
-        df_filtrado = df_deudores[
-            df_deudores["codigo_estudiante"].astype(str).str.contains(est.resolver_codigo(search_term), case=False, na=False)
-            | df_deudores["nombres"].astype(str).str.contains(search_term, case=False, na=False)
-        ]
+        codigos_encontrados = est.buscar_personas(search_term)["codigo"]
+        df_filtrado = df_deudores[df_deudores["codigo_estudiante"].isin(codigos_encontrados)]
     else:
         df_filtrado = df_deudores
 

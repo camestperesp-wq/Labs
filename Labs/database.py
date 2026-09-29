@@ -6,6 +6,7 @@ import sqlite3
 
 import pandas as pd
 import streamlit as st
+from busqueda import normalizar_busqueda
 
 DB_PATH = Path(__file__).resolve().with_name("mi_agenda.db")
 _BACKGROUND_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="labs-db")
@@ -61,6 +62,7 @@ def limpiar_bloques_impares_duplicados(conn):
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH, timeout=10, factory=_ClosingConnection)
+    conn.create_function("normalizar_busqueda", 1, normalizar_busqueda, deterministic=True)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 10000")
     conn.execute("PRAGMA synchronous = NORMAL")
@@ -115,6 +117,15 @@ def fetch_df(query, params=()):
 
 def clear_cache():
     fetch_df_cached.clear()
+
+
+@st.cache_resource(show_spinner=False)
+def ensure_initialized(database_path):
+    """Ejecuta migraciones una vez por proceso/base, nunca en cada interacción."""
+    if Path(database_path).resolve() != DB_PATH.resolve():
+        raise ValueError("La ruta no corresponde a la base configurada.")
+    init_db()
+    return True
 
 
 def init_db():
@@ -313,6 +324,22 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_prestamos_pasillo_equipo ON prestamos_pasillo_equipos(equipo_id, prestamo_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_multas_prestamos_codigo_estado ON multas_prestamos(codigo_estudiante, estado)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_multas_prestamos_prestamo ON multas_prestamos(prestamo_id)")
+
+        # Conserva los nombres de columnas históricos, pero limita la regla a Artix.
+        c.execute("""UPDATE prestamos_pasillo SET limite_fpga=NULL, ultima_renovacion=NULL
+                     WHERE estado='PRESTADO' AND limite_fpga IS NOT NULL
+                       AND NOT EXISTS (
+                           SELECT 1 FROM prestamos_pasillo_equipos pe
+                           JOIN equipos_pasillo e ON e.id=pe.equipo_id
+                           WHERE pe.prestamo_id=prestamos_pasillo.id
+                             AND upper(e.nombre) LIKE '%ARTIX%')""")
+        c.execute("""UPDATE prestamos_pasillo SET limite_fpga=datetime(fecha_salida, '+2 hours')
+                     WHERE estado='PRESTADO' AND limite_fpga IS NULL
+                       AND EXISTS (
+                           SELECT 1 FROM prestamos_pasillo_equipos pe
+                           JOIN equipos_pasillo e ON e.id=pe.equipo_id
+                           WHERE pe.prestamo_id=prestamos_pasillo.id
+                             AND upper(e.nombre) LIKE '%ARTIX%')""")
 
         limpiar_bloques_impares_duplicados(conn)
 

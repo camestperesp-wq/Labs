@@ -238,33 +238,40 @@ def registrar_asistencia_docente(fecha, hora, laboratorio, nombre_docente, asign
 # ============================================================
 
 def actualizar_asiste(id_res, estado, tecnico=None):
-    r = db.ejecutar("SELECT laboratorio, fecha, hora, codigo FROM reservas WHERE id=?", (id_res,), fetch=True)
-    if not r:
-        return
-    
-    lab, fecha, hora, codigo = r[0]
-    
-    # Actualizar el estado en la reserva
-    db.ejecutar("UPDATE reservas SET asiste=? WHERE id=?", (estado, id_res))
-    
-    # Si es profesor, NO generar multa (solo actualizar estado)
-    if codigo == "PROFESOR":
-        return
-    
-    # Si es estudiante y estado es 'No', generar multa
-    if estado == "No":
-        from datetime import datetime
-        fecha_hoy = datetime.now().date().strftime("%Y-%m-%d")
-        motivo = f"No asistió a {lab} - {fecha} {hora}"
-        
-        estudiante = db.ejecutar("SELECT nombres FROM estudiantes WHERE codigo=?", (codigo,), fetch=True)
-        if estudiante:
-            tecnico_asigna = tecnico if tecnico else "Sistema"
-            db.ejecutar("""
-                INSERT INTO multas 
-                (codigo_estudiante, fecha_multa, motivo, sancion, tecnico_asigna, pagado)
-                VALUES (?, ?, ?, ?, ?, 'NO')
-            """, (codigo, fecha_hoy, motivo, "", tecnico_asigna))
+    if estado not in ("Si", "No", ""):
+        raise ValueError("Estado de asistencia no válido")
+    db.ejecutar(
+        "UPDATE reservas SET asiste=?, tecnico=coalesce(?, tecnico) WHERE id=?",
+        (estado, tecnico, id_res),
+    )
+
+
+def revisar_inasistencia(id_res, estado, tecnico, observaciones="", sancion=""):
+    """Resuelve una alerta y aplica una multa solo por decisión explícita del técnico."""
+    from constants import es_tecnico_valido
+    if estado not in ("Si", "No") or not es_tecnico_valido(tecnico):
+        raise ValueError("Selecciona un estado y un técnico responsable válidos.")
+    with db.get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        fila = conn.execute(
+            "SELECT laboratorio, fecha, hora, codigo FROM reservas WHERE id=? AND activo=1 AND coalesce(asiste,'')=''",
+            (int(id_res),),
+        ).fetchone()
+        if not fila:
+            raise ValueError("La reserva ya fue revisada o no está activa.")
+        lab, fecha, hora, codigo = fila
+        conn.execute("UPDATE reservas SET asiste=?, tecnico=? WHERE id=?", (estado, tecnico, int(id_res)))
+        if estado == "No" and codigo != "PROFESOR":
+            conn.execute(
+                """INSERT INTO multas
+                (codigo_estudiante, fecha_multa, motivo, sancion, tecnico_asigna, pagado, observaciones)
+                VALUES (?, ?, ?, ?, ?, 'NO', ?)""",
+                (codigo, datetime.now().date().isoformat(), f"No asistió a {lab} - {fecha} {hora}",
+                 sancion.strip(), tecnico, observaciones.strip()),
+            )
+    db.clear_cache()
+
+
 # ============================================================
 #  ELIMINACIÓN
 # ============================================================
@@ -296,12 +303,19 @@ def get_reservas_fecha_lab_hora(fecha, lab, hora):
                     (fecha, lab, hora))
 
 def buscar_reservas_persona(termino):
-    """
-    Busca reservas de una persona por su código (parcial).
-    """
+    """Busca por identidad exacta o todos los términos de nombres y apellidos."""
     termino = est.normalizar_entrada_busqueda(termino)
     codigo = est.resolver_codigo(termino)
-    df = db.fetch_df("""SELECT
+    from busqueda import normalizar_busqueda
+    tokens = normalizar_busqueda(termino).split()
+    # Un identificador resuelto nunca mezcla registros de otras personas.
+    exacto = db.ejecutar("SELECT 1 FROM estudiantes WHERE codigo=? UNION SELECT 1 FROM reservas WHERE codigo=? LIMIT 1", (codigo, codigo), fetch=True)
+    if exacto or not tokens:
+        condicion, parametros = "r.codigo=?", (codigo,)
+    else:
+        condicion = " AND ".join("instr(normalizar_busqueda(r.nombres), ?) > 0" for _ in tokens)
+        parametros = tuple(tokens)
+    df = db.fetch_df(f"""SELECT
                             r.id, r.fecha, r.hora, r.laboratorio, r.banco,
                             r.codigo, r.nombres, r.proyecto, r.asiste,
                             r.observaciones, r.tecnico,
@@ -311,11 +325,11 @@ def buscar_reservas_persona(termino):
                                 AND upper(trim(coalesce(m.pagado, 'NO'))) = 'NO'
                             ) AS multas_activas
                        FROM reservas r
-                       WHERE r.codigo=?
+                       WHERE ({condicion})
                          AND r.activo=1
                          AND (r.asiste IS NULL OR trim(r.asiste)='')
                        ORDER BY r.fecha ASC, r.hora ASC, r.laboratorio ASC, r.banco ASC""",
-                    (codigo,))
+                    parametros)
     return aplicar_intercambios_busqueda(df)
 
 def get_reporte_completo(fecha_desde, fecha_hasta):

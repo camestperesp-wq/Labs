@@ -7,6 +7,14 @@ Crear cada cuenta con `python auth.py`. El comando solicita usuario y contraseñ
 sin mostrarla. No hay usuarios ni contraseñas predeterminados. Ejecutar de nuevo
 para cambiar una contraseña y revocar las sesiones de esa cuenta.
 
+Para asignar el rol al crear o actualizar una cuenta, usar
+`python auth.py --role administrador` o `python auth.py --role tecnico`.
+Ambos roles tienen acceso a todas las secciones, conforme a la política acordada.
+Las cuentas existentes se migran al rol técnico; cambiar una contraseña sin
+`--role` conserva el rol. Los permisos se definen en `routing.py`, nunca en la URL
+ni en valores enviados por el navegador. Las cuentas con `active=0` y los roles
+desconocidos no pueden iniciar sesión ni reutilizar sesiones anteriores.
+
 Iniciar con `python -m streamlit run server.py`. Para uso local, abrir
 `http://localhost:8501`. En la red institucional, publicar esta entrada mediante
 HTTPS y mantener el puerto interno limitado al proxy o al equipo local. Configurar
@@ -25,6 +33,28 @@ usuario o dirección bloquean el acceso durante el resto de una ventana de 15 mi
 Proteger `auth.db` con los permisos del usuario que ejecuta el servicio: contiene
 hashes de contraseñas y tokens, nunca sus valores originales. No está versionado.
 Respaldar `mi_agenda.db` antes de actualizar. Las pruebas usan bases temporales.
+
+# Navegación y consultas
+
+Las rutas son `/horario`, `/reservas`, `/prestamos`, `/deudores`, `/consultas`,
+`/cargar-datos`. `/` redirige al horario, sin página de Inicio.
+`st.navigation` ejecuta solo la página seleccionada; el historial de reservas
+se procesa al abrir su panel. Las alertas permanecen visibles en un panel superior común y se actualizan
+cada 60 segundos mediante un fragmento, sin volver a ejecutar la sección activa. Las migraciones se ejecutan una vez por proceso
+y base de datos, no en cada interacción.
+
+Cada página valida la sesión y sus permisos antes de cargar datos. Los fragmentos
+y diálogos vuelven a validarlos porque pueden ejecutarse sin repetir la entrada
+principal. El middleware también protege las solicitudes HTTP y WebSocket.
+Al actualizar esta versión, reiniciar `server.py` para cargar el nuevo middleware.
+
+La búsqueda admite nombres completos y apellidos, sin distinguir tildes,
+mayúsculas ni espacios repetidos. Al importar estudiantes se unen `Nombres` y
+`Apellidos`, o `Primer apellido` y `Segundo apellido`, en el nombre completo
+almacenado. Los archivos que ya contienen el nombre completo siguen siendo válidos.
+Las consultas leen el historial de multas directamente, aunque el usuario no
+tenga reservas pendientes o solo exista en la tabla de multas. No hay un índice
+externo que deba reconstruirse después de registrar una multa.
 
 # Excel de multas
 
@@ -61,7 +91,7 @@ Backend: `prestamos_pasillos.cargar_inventario_excel`.
 
 # Verificación
 
-`python -m unittest test_importaciones_auth test_prestamos_pasillos`
+`python -B -m unittest test_importaciones_auth test_prestamos_pasillos test_alertas_inasistencias test_rutas_consultas`
 
 Comprobar en navegador el ciclo lunes → otro día → lunes en Horario General:
 únicamente el clic derecho abre el menú de edición del espacio seleccionado.
