@@ -5,6 +5,7 @@ import database as db
 from routing import SECTIONS, can_access
 from app_shell import mostrar_marco, mostrar_navegacion
 from app_state import inicializar_estado
+from seasonal_theme import render_theme
 from alertas_inasistencias import mostrar_alertas_inasistencias
 from asistencias_pendientes import mostrar_panel_asistencias_pendientes
 
@@ -29,6 +30,7 @@ pages.extend(st.Page(file, title=title, url_path=section)
              for section, (title, file) in SECTIONS.items() if can_access(user[2], section))
 page = st.navigation(pages, position="hidden")
 mostrar_navegacion(pages[1:], page)
+render_theme(user[0])
 
 # Compatibilidad con enlaces antiguos; ningún parámetro selecciona código arbitrario.
 legacy = st.query_params.get("modulo", "")

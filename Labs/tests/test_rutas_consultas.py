@@ -18,6 +18,7 @@ import multas
 import prestamos_pasillos as prestamos
 from routing import SECTIONS, ROLE_PERMISSIONS
 
+APP_DIR = Path(__file__).resolve().parents[1]
 
 class RutasConsultasTest(unittest.TestCase):
     def setUp(self):
@@ -108,7 +109,7 @@ class RutasConsultasTest(unittest.TestCase):
                            'calendario.mostrar_detalle_celda', 'calendario.mostrar_formulario_reserva_profesor',
                            'calendario.mostrar_formulario_asistencia_docente'):
                 mocks.enter_context(patch(target))
-            app = AppTest.from_file('app.py').run()
+            app = AppTest.from_file(str(APP_DIR / 'app.py')).run()
             self.assertFalse(app.exception)
             self.assertEqual(spies["horario"].call_count, 1)
             self.assertEqual(spies["alertas"].call_count, 1)
@@ -126,7 +127,7 @@ class RutasConsultasTest(unittest.TestCase):
     def test_pagina_directa_y_fragmento_rechazan_token_revocado(self):
         auth.logout(self.token)
         with patch('prestamos_pasillos_ui.mostrar_prestamos_pasillos') as render:
-            app = AppTest.from_file('app_pages/prestamos.py').run()
+            app = AppTest.from_file(str(APP_DIR / 'app_pages/prestamos.py')).run()
             self.assertFalse(app.exception)
             render.assert_not_called()
         app = AppTest.from_string('from alertas_inasistencias import mostrar_alertas_inasistencias\nmostrar_alertas_inasistencias()').run()
@@ -134,7 +135,7 @@ class RutasConsultasTest(unittest.TestCase):
         self.assertFalse(app.expander)
 
     def test_paginas_reales_sin_errores(self):
-        app = AppTest.from_file('app.py', default_timeout=30).run()
+        app = AppTest.from_file(str(APP_DIR / 'app.py'), default_timeout=30).run()
         self.assertFalse(app.exception)
         for section, (_, file) in SECTIONS.items():
             app.switch_page(file)
@@ -176,7 +177,7 @@ class RutasConsultasTest(unittest.TestCase):
         with patch.dict(ROLE_PERMISSIONS, {'tecnico': frozenset({'consultas'})}):
             self.assertEqual(self.request('/deudores', self.token)[0]['status'], 403)
             with patch('ui_components.mostrar_deudores') as render:
-                app = AppTest.from_file('app_pages/deudores.py').run()
+                app = AppTest.from_file(str(APP_DIR / 'app_pages/deudores.py')).run()
                 self.assertFalse(app.exception)
                 render.assert_not_called()
         auth.logout(self.token)

@@ -626,17 +626,18 @@ def mostrar_horario_general():
 
     opciones_carrera_js = json.dumps(opciones_carrera, ensure_ascii=False)
 
-    st.components.v1.html(
-        """
-        <script>
+    horario_script = """
         (function () {
             function setup() {
-                const doc = window.parent.document;
+                // Conservar la ventana principal: el iframe puede desmontarse
+                // antes de que otra página ejecute estas funciones de limpieza.
+                const host = window.parent;
+                const doc = host.document;
                 const headers = doc.querySelectorAll(".horario-general-header-scroll");
                 const bodies = doc.querySelectorAll(".horario-general-body-scroll");
                 const header = headers[headers.length - 1];
                 const body = bodies[bodies.length - 1];
-                const horarioUiVersion = "stable-delegated-v15";
+                const horarioUiVersion = "stable-parent-v16";
                 const renderedDay = __DIA_HORARIO__;
                 const carreraOptions = __OPCIONES_CARRERA__;
 
@@ -668,6 +669,7 @@ def mostrar_horario_general():
                 const savedBodyX = window.parent.sessionStorage.getItem("horario-body-x");
                 if (savedWindowY !== null || savedBodyX !== null) {
                     const restorePosition = function () {
+                        if (!body.isConnected || !header.isConnected) return;
                         if (savedBodyX !== null) {
                             body.scrollLeft = Number(savedBodyX) || 0;
                             header.scrollLeft = Number(savedBodyX) || 0;
@@ -692,14 +694,12 @@ def mostrar_horario_general():
                     window.parent.__horarioContextCleanup();
                 }
 
-                let syncingScroll = false;
                 function syncHorizontal(from, to) {
-                    if (syncingScroll) return;
-                    syncingScroll = true;
-                    to.scrollLeft = from.scrollLeft;
-                    window.requestAnimationFrame(function () {
-                        syncingScroll = false;
-                    });
+                    // No bloquear eventos: el último movimiento siempre prevalece.
+                    // La igualdad evita el ciclo de eventos entre ambos elementos.
+                    if (Math.abs(to.scrollLeft - from.scrollLeft) > 0.5) {
+                        to.scrollLeft = from.scrollLeft;
+                    }
                 }
 
                 function onBodyScroll() {
@@ -717,7 +717,7 @@ def mostrar_horario_general():
                 window.parent.__horarioScrollCleanup = function () {
                     body.removeEventListener("scroll", onBodyScroll);
                     header.removeEventListener("scroll", onHeaderScroll);
-                    window.parent.__horarioScrollCleanup = null;
+                    host.__horarioScrollCleanup = null;
                 };
 
                 // Streamlit reemplaza la tabla durante cada rerender. Los controles
@@ -749,7 +749,9 @@ def mostrar_horario_general():
 
                 function hideMenu(restoreFocus) {
                     menu.style.display = "none";
-                    if (restoreFocus && menu.currentCell) menu.currentCell.focus();
+                    if (restoreFocus && menu.currentCell && menu.currentCell.isConnected) {
+                        menu.currentCell.focus({ preventScroll: true });
+                    }
                 }
 
                 function showMenu(cell, clientX, clientY) {
@@ -767,7 +769,7 @@ def mostrar_horario_general():
                     if (rect.bottom > doc.documentElement.clientHeight - 8) {
                         menu.style.top = Math.max(8, clientY - rect.height) + "px";
                     }
-                    menu.querySelector("button").focus();
+                    menu.querySelector("button").focus({ preventScroll: true });
                 }
 
                 const previousModal = doc.getElementById("horario-edit-modal");
@@ -861,7 +863,7 @@ def mostrar_horario_general():
                     doc.getElementById("horario-modal-free").href = buildHorarioUrl("liberar");
                     modal.style.display = "flex";
                     window.setTimeout(function () {
-                        doc.getElementById("horario-modal-asignatura").focus();
+                        doc.getElementById("horario-modal-asignatura").focus({ preventScroll: true });
                     }, 0);
                 }
 
@@ -922,8 +924,8 @@ def mostrar_horario_general():
 
                 {
                     function onCellContext(event) {
-                        const cell = event.target.closest(".horario-editable-cell");
-                        if (!cell) return;
+                        const cell = event.target.closest && event.target.closest(".horario-editable-cell");
+                        if (!cell || !cell.isConnected || !body.contains(cell)) return;
 
                         event.preventDefault();
                         event.stopPropagation();
@@ -932,7 +934,7 @@ def mostrar_horario_general():
                         const y = event.clientY || (rect.top + 12);
                         showMenu(cell, x, y);
                     }
-                    doc.addEventListener("contextmenu", onCellContext);
+                    doc.addEventListener("contextmenu", onCellContext, true);
 
                     menu.querySelector('[data-menu-action="editar"]').addEventListener("click", function () {
                         if (menu.currentCell) {
@@ -945,24 +947,51 @@ def mostrar_horario_general():
                         hideMenu(false);
                     }
                     function onDocumentKeydown(event) {
-                        if (event.key === "Escape") hideMenu(true);
+                        if (event.key === "Escape") {
+                            hideMenu(true);
+                            closeEditModal();
+                        }
                     }
                     doc.addEventListener("click", onDocumentClick);
                     doc.addEventListener("keydown", onDocumentKeydown);
-                    body.addEventListener("scroll", function () { hideMenu(false); }, { passive: true });
+                    function onTableScroll() { hideMenu(false); }
+                    body.addEventListener("scroll", onTableScroll, { passive: true });
+                    if (host.__horarioObserver) host.__horarioObserver.disconnect();
+                    const observer = new host.MutationObserver(function () {
+                        const currentHeaders = doc.querySelectorAll(".horario-general-header-scroll");
+                        const currentBodies = doc.querySelectorAll(".horario-general-body-scroll");
+                        const nextHeader = currentHeaders[currentHeaders.length - 1];
+                        const nextBody = currentBodies[currentBodies.length - 1];
+                        if (nextHeader && nextBody && (nextHeader !== header || nextBody !== body)) {
+                            observer.disconnect();
+                            setup();
+                        } else if (!nextHeader && !nextBody) {
+                            hideMenu(false);
+                            closeEditModal();
+                        }
+                    });
+                    observer.observe(doc.body, { childList: true, subtree: true });
+                    host.__horarioObserver = observer;
                     window.parent.__horarioContextCleanup = function () {
-                        doc.removeEventListener("contextmenu", onCellContext);
+                        doc.removeEventListener("contextmenu", onCellContext, true);
                         doc.removeEventListener("click", onDocumentClick);
                         doc.removeEventListener("keydown", onDocumentKeydown);
-                        window.parent.__horarioContextCleanup = null;
+                        body.removeEventListener("scroll", onTableScroll);
+                        observer.disconnect();
+                        menu.remove();
+                        modal.remove();
+                        host.__horarioContextCleanup = null;
                     };
                 }
             }
 
             setup();
         })();
-        </script>
-        """.replace("__OPCIONES_CARRERA__", opciones_carrera_js).replace("__DIA_HORARIO__", json.dumps(dia_seleccionado)),
+        """.replace("__OPCIONES_CARRERA__", opciones_carrera_js).replace("__DIA_HORARIO__", json.dumps(dia_seleccionado))
+    # Los listeners y timers pertenecen a la ventana principal y sobreviven al
+    # desmontaje del iframe de Streamlit. JSON protege las cadenas del script.
+    st.components.v1.html(
+        "<script>window.parent.Function(" + json.dumps(horario_script).replace("<", "\\u003c") + ")();</script>",
         height=0,
         scrolling=False,
     )

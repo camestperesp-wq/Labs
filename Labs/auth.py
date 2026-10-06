@@ -5,12 +5,11 @@ import secrets
 import sqlite3
 import time
 from contextlib import contextmanager
-from pathlib import Path
 import re
 from functools import lru_cache
 from routing import ROLE_PERMISSIONS, can_access
 
-AUTH_DB = Path(__file__).with_name("auth.db")
+from paths import AUTH_DB
 TTL_SECONDS = 24 * 60 * 60
 COOKIE = "labs_session"
 

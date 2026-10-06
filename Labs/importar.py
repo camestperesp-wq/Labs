@@ -8,8 +8,8 @@ from pathlib import Path
 from database import limpiar_bloques_impares_duplicados
 
 BASE_DIR = Path(__file__).resolve().parent
-ARCHIVO_EXCEL = BASE_DIR / "horario_filtrado.xlsx"
-DB_PATH = BASE_DIR / "mi_agenda.db"
+ARCHIVO_EXCEL = BASE_DIR / "data" / "imports" / "horario_filtrado.xlsx"
+from paths import DB_PATH
 
 # ============================================================
 #  MAPEOS

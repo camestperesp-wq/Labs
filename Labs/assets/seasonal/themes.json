@@ -1,0 +1,162 @@
+{
+  "standard": {
+    "label": "Marca institucional",
+    "months": [],
+    "icon": "◆",
+    "illustration": "seal",
+    "font": "\"Segoe UI\", Arial, sans-serif",
+    "colors": {
+      "primary": "#941419",
+      "heading": "#681017",
+      "accent": "#c8a21a",
+      "background": "#f5f7fb",
+      "surface": "#ffffff",
+      "text": "#17202a",
+      "muted": "#526071",
+      "border": "#8793a3",
+      "soft": "#eef2f7",
+      "onPrimary": "#ffffff"
+    }
+  },
+  "friendship": {
+    "label": "Amor y Amistad",
+    "months": [
+      9
+    ],
+    "icon": "♥",
+    "illustration": "hearts",
+    "font": "\"Trebuchet MS\", Arial, sans-serif",
+    "colors": {
+      "primary": "#a51f50",
+      "heading": "#731338",
+      "accent": "#efb1c8",
+      "background": "#fff4f8",
+      "surface": "#ffffff",
+      "text": "#321d29",
+      "muted": "#725064",
+      "border": "#a86e88",
+      "soft": "#fbe1eb",
+      "onPrimary": "#ffffff"
+    }
+  },
+  "halloween": {
+    "label": "Halloween",
+    "months": [
+      10
+    ],
+    "icon": "🎃",
+    "illustration": "ghost",
+    "font": "\"Trebuchet MS\", Arial, sans-serif",
+    "colors": {
+      "primary": "#45215f",
+      "heading": "#45215f",
+      "accent": "#ffad42",
+      "background": "#f6f1fa",
+      "surface": "#ffffff",
+      "text": "#251633",
+      "muted": "#665371",
+      "border": "#9582a3",
+      "soft": "#ece1f5",
+      "onPrimary": "#ffffff"
+    }
+  },
+  "christmas": {
+    "label": "Navidad",
+    "months": [
+      12
+    ],
+    "icon": "❄",
+    "illustration": "tree",
+    "font": "Georgia, \"Times New Roman\", serif",
+    "colors": {
+      "primary": "#155d3c",
+      "heading": "#155d3c",
+      "accent": "#e4be55",
+      "background": "#f1f8f3",
+      "surface": "#ffffff",
+      "text": "#182d21",
+      "muted": "#4f6557",
+      "border": "#7d9987",
+      "soft": "#e0efe5",
+      "onPrimary": "#ffffff"
+    }
+  },
+  "rain": {
+    "label": "Noviembre · Lluvia",
+    "months": [
+      11
+    ],
+    "icon": "☂",
+    "illustration": "cat",
+    "font": "\"Segoe UI\", Arial, sans-serif",
+    "colors": {
+      "primary": "#265478",
+      "heading": "#204461",
+      "accent": "#91bedc",
+      "background": "#f0f6fa",
+      "surface": "#ffffff",
+      "text": "#192c3c",
+      "muted": "#526071",
+      "border": "#8793a3",
+      "soft": "#e2eef6",
+      "onPrimary": "#ffffff"
+    }
+  },
+  "birthday": {
+    "label": "Cumpleaños · Rosa",
+    "months": [],
+    "icon": "🎂",
+    "illustration": "balloons",
+    "font": "\"Trebuchet MS\", Arial, sans-serif",
+    "colors": {
+      "primary": "#a51f50",
+      "heading": "#731338",
+      "accent": "#f3c85e",
+      "background": "#fff4f8",
+      "surface": "#ffffff",
+      "text": "#321d29",
+      "muted": "#665371",
+      "border": "#9582a3",
+      "soft": "#fbe1eb",
+      "onPrimary": "#ffffff"
+    }
+  },
+  "colombia": {
+    "label": "Selección Colombia",
+    "months": [],
+    "icon": "⚽",
+    "illustration": "football",
+    "font": "\"Segoe UI\", Arial, sans-serif",
+    "colors": {
+      "primary": "#123b75",
+      "heading": "#123b75",
+      "accent": "#f2c500",
+      "background": "#fffbee",
+      "surface": "#ffffff",
+      "text": "#17202a",
+      "muted": "#526071",
+      "border": "#8793a3",
+      "soft": "#fff1b0",
+      "onPrimary": "#ffffff"
+    }
+  },
+  "birthday_blue": {
+    "label": "Cumpleaños · Azul",
+    "months": [],
+    "icon": "🎂",
+    "illustration": "balloons",
+    "font": "\"Trebuchet MS\", Arial, sans-serif",
+    "colors": {
+      "primary": "#235b8c",
+      "heading": "#19456b",
+      "accent": "#95c5ee",
+      "background": "#f0f7ff",
+      "surface": "#ffffff",
+      "text": "#192c3c",
+      "muted": "#665371",
+      "border": "#9582a3",
+      "soft": "#dfefff",
+      "onPrimary": "#ffffff"
+    }
+  }
+}

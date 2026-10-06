@@ -1,0 +1,181 @@
+/* Semantic reservation/status colors deliberately keep their existing meaning. */
+html[data-season] .labs-hero { overflow: visible !important; }
+html[data-season] .labs-user-menu-panel {
+  max-height: calc(100dvh - 90px); overflow-y: auto;
+  box-sizing: border-box; width: min(290px, calc(100vw - 32px));
+  padding: 18px; border: 1px solid #e1e5eb; border-radius: 16px;
+  box-shadow: 0 16px 48px rgba(24,33,44,.18); line-height: 1.45;
+}
+html[data-season] #season-menu-close {
+  float: right; width: 30px; height: 30px; padding: 0; margin: -8px -8px 0 8px;
+  border: 0; border-radius: 8px; background: var(--season-soft); color: var(--season-primary);
+  cursor: pointer; font-size: 24px; line-height: 1;
+}
+html[data-season] .labs-user-menu-panel label {
+  display: block; padding: 0; margin: 0 0 8px; font-size: .875rem;
+  color: var(--season-text, #17202a); font-weight: 700;
+}
+html[data-season] .labs-user-menu-panel select {
+  box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; border-radius: 9px;
+  background: #f8fafc; color: #17202a; border: 1px solid #c5ccd6; padding: 8px 10px;
+  font-size: .875rem; margin: 0 0 14px; cursor: pointer;
+}
+html[data-season] .labs-user-menu-panel .season-menu-effects {
+  display: flex; align-items: center; gap: 10px; cursor: pointer; min-height: 44px;
+  padding: 8px 10px; margin-bottom: 12px; border-radius: 9px; background: var(--season-soft);
+  white-space: nowrap; font-weight: 600;
+}
+html[data-season] .labs-user-menu-panel a { border-top: 1px solid #e1e5eb; border-radius: 0; padding-top: 14px; }
+html[data-season] .labs-user-menu-panel a[href="/logout"] {
+  display: flex !important; position: sticky; bottom: -18px; background: #fff;
+  color: #941419 !important; min-height: 44px; margin-top: 8px;
+}
+.season-menu-effects input { width: 18px; height: 18px; accent-color: var(--season-primary); }
+html[data-season] .stApp {
+  background: var(--season-background) !important;
+  color: var(--season-text) !important;
+}
+html[data-season] body, html[data-season] .stApp,
+html[data-season] .stApp p, html[data-season] .stApp label,
+html[data-season] .stApp input, html[data-season] .stApp button {
+  font-family: var(--season-font) !important;
+}
+html[data-season] .st-key-labs_navigation,
+html[data-season] .stTabs [data-baseweb="tab-list"] {
+  background: var(--season-primary) !important;
+  border-color: var(--season-accent) !important;
+}
+html[data-season] .st-key-labs_navigation a,
+html[data-season] .st-key-labs_navigation a p,
+html[data-season] .stTabs [role="tab"] p {
+  color: var(--season-onPrimary) !important;
+}
+html[data-season] .st-key-labs_navigation a:hover,
+html[data-season] .stTabs [role="tab"][aria-selected="true"] {
+  background: var(--season-heading) !important;
+}
+html[data-season] .st-key-labs_navigation a::before {
+  background: var(--season-accent) !important;
+}
+html[data-season] .stApp h1, html[data-season] .stApp h2, html[data-season] .stApp h3 {
+  color: var(--season-heading) !important;
+}
+html[data-season] .stApp .stButton button {
+  background: var(--season-surface) !important;
+  color: var(--season-primary) !important;
+  border-color: var(--season-border) !important;
+}
+html[data-season] .stApp .stButton button p { color: inherit !important; }
+html[data-season] .stApp :focus-visible {
+  outline: 3px solid var(--season-primary) !important;
+  outline-offset: 3px;
+}
+.season-decoration {
+  position: fixed; right: 18px; bottom: 18px; width: 64px; height: 64px;
+  z-index: 5; pointer-events: none; color: var(--season-primary);
+}
+.season-decoration svg { width: 100%; height: 100%; }
+.season-decoration [data-art] { display: none; }
+html[data-season="friendship"] .season-decoration [data-art="hearts"],
+html[data-season="halloween"] .season-decoration [data-art="ghost"],
+html[data-season="christmas"] .season-decoration [data-art="tree"] { display: block; }
+html[data-season-effects="true"] .season-decoration { animation: season-float 4s ease-in-out infinite; }
+@keyframes season-float { 50% { transform: translateY(-6px); } }
+@media (prefers-reduced-motion: reduce) { .season-decoration { animation: none !important; } }
+@media (max-width: 640px), print { .season-decoration { display: none; } }
+@media (forced-colors: active) { .season-decoration { display: none; } }
+
+/* Distributed SVGs: transform/opacity only; never intercept interactions. */
+.season-floating {
+  display: none; position: fixed; inset: 0; overflow: hidden;
+  pointer-events: none; user-select: none; z-index: 10000;
+}
+html[data-season-effects="true"] .season-floating { display: block; }
+html[data-season="standard"] .season-floating,
+html[data-season="standard"] .season-decoration { display: none !important; }
+.season-particle {
+  position: absolute; left: var(--particle-x); top: 100%; width: 44px; height: 44px;
+  color: var(--season-primary); opacity: 0;
+  animation: season-flight calc(18s + var(--particle-index) * 2s) linear infinite;
+  animation-delay: calc(var(--particle-index) * -5s);
+}
+.season-particle:nth-child(3n) { width: 34px; height: 34px; }
+.season-particle svg { width: 100%; height: 100%; }
+.season-particle [data-float-art] { display: none; }
+html[data-season="friendship"] [data-float-art="heart"],
+html[data-season="halloween"] .season-particle:nth-child(3n+1) [data-float-art="bat"],
+html[data-season="halloween"] .season-particle:nth-child(3n+2) [data-float-art="ghost"],
+html[data-season="halloween"] .season-particle:nth-child(3n) [data-float-art="spider"],
+html[data-season="christmas"] .season-particle:nth-child(3n+1) [data-float-art="candy"],
+html[data-season="christmas"] .season-particle:nth-child(3n+2) [data-float-art="snowman"],
+html[data-season="christmas"] .season-particle:nth-child(3n) [data-float-art="tree"],
+html[data-season^="birthday"] .season-particle:nth-child(odd) [data-float-art="balloon"],
+html[data-season^="birthday"] .season-particle:nth-child(even) [data-float-art="cake"],
+html[data-season="colombia"] .season-particle:nth-child(odd) [data-float-art="flag"],
+html[data-season="colombia"] .season-particle:nth-child(even) [data-float-art="football"],
+html[data-season="rain"] [data-float-art="rain"] { display: block; }
+.season-rain-extra { display: none; }
+html[data-season="rain"] .season-rain-extra { display: block; }
+html[data-season="colombia"] .st-key-labs_navigation {
+  border-top: 5px solid #f2c500; border-bottom: 4px solid #ce2339 !important;
+}
+.season-web { display: none; position: absolute; top: 0; width: 140px; height: 140px; color: #704784; opacity: .5; }
+html[data-season="halloween"] .season-web { display: block; }
+.season-web-left { left: 0; }
+.season-web-right { right: 0; transform: scaleX(-1); }
+.season-web svg { width: 100%; height: 100%; }
+.season-corner { position: absolute; top: 0; width: 160px; height: 160px; opacity: .8; }
+.season-corner-left { left: 0; }
+.season-corner-right { right: 0; transform: scaleX(-1); }
+.season-corner svg { width: 100%; height: 100%; }
+.season-corner [data-corner-art] { display: none; }
+html[data-season="standard"] [data-corner-art="standard"],
+html[data-season="friendship"] [data-corner-art="friendship"],
+html[data-season="rain"] [data-corner-art="rain"],
+html[data-season="christmas"] [data-corner-art="christmas"],
+html[data-season^="birthday"] [data-corner-art="birthday"],
+html[data-season="colombia"] [data-corner-art="colombia"] { display: block; }
+html[data-season="birthday_blue"] [data-float-art="balloon"] ellipse,
+html[data-season="birthday_blue"] [data-float-art="balloon"] path:first-of-type,
+html[data-season="birthday_blue"] [data-float-art="cake"] path:nth-child(2),
+html[data-season="birthday_blue"] [data-corner-art="birthday"] ellipse:first-of-type,
+html[data-season="birthday_blue"] [data-corner-art="birthday"] path:nth-child(3) { fill: #428cca; }
+@media (pointer: fine) {
+  html[data-season], html[data-season] body, html[data-season] .stApp,
+  html[data-season] .stApp *:not(input):not(textarea),
+  html[data-season] .labs-user-menu-panel, html[data-season] .labs-user-menu-panel * {
+    cursor: var(--season-cursor, auto) !important;
+  }
+  html[data-season] input:not([type="checkbox"]):not([type="radio"]), html[data-season] textarea {
+    cursor: text !important;
+  }
+  html[data-season] button:disabled, html[data-season] [aria-disabled="true"] { cursor: not-allowed !important; }
+}
+.season-rain-cat { display: none; position: absolute; bottom: 12px; right: 24px; width: 120px; }
+html[data-season="rain"] .season-rain-cat { display: block; }
+html[data-season="rain"] .season-particle {
+  top: -64px; animation-name: season-rain; animation-duration: 2.4s;
+  animation-delay: calc(var(--particle-index) * -.17s);
+}
+@keyframes season-rain {
+  0% { transform: translate3d(0, 0, 0); opacity: 0; }
+  15%, 85% { opacity: .55; }
+  100% { transform: translate3d(-50px, calc(100vh + 100px), 0); opacity: 0; }
+}
+@keyframes season-flight {
+  0% { transform: translate3d(0, 30px, 0) rotate(-12deg); opacity: 0; }
+  12% { opacity: .7; }
+  45% { transform: translate3d(12px, -48vh, 0) rotate(12deg); opacity: .7; }
+  85% { opacity: .7; }
+  100% { transform: translate3d(0, calc(-100vh - 80px), 0) rotate(-12deg); opacity: 0; }
+}
+@media (max-width: 640px) {
+  .season-corner, .season-web { width: 85px; height: 85px; opacity: .6; }
+  .season-particle:nth-child(n+7) { display: none; }
+  .season-particle { width: 22px; height: 22px; }
+  html[data-season="rain"] .season-rain-extra:nth-child(n+29) { display: none; }
+}
+@media (prefers-reduced-motion: reduce), (forced-colors: active), print {
+  html[data-season-effects="true"] .season-floating { display: none; }
+  .season-particle { animation: none !important; }
+}

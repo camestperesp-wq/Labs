@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 from busqueda import normalizar_busqueda
 
-DB_PATH = Path(__file__).resolve().with_name("mi_agenda.db")
+from paths import DB_PATH
 _BACKGROUND_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="labs-db")
 
 

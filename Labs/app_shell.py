@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import json
 from html import escape
 from pathlib import Path
 import streamlit as st
@@ -1065,7 +1066,9 @@ def mostrar_marco(usuario_actual):
 
     facultad_logo_html = f'<img src="{facultad_src}" alt="Facultad de Ingenieria">' if facultad_src else "Ingenieria"
 
-    fecha_panel = datetime.now().strftime("%d/%m/%Y")
+    ahora_local = datetime.now(timezone(timedelta(hours=-5)))
+    fecha_panel = ahora_local.strftime("%d/%m/%Y")
+    hora_panel = ahora_local.strftime("%H:%M")
 
     usuario_menu = escape(str(usuario_actual))
 
@@ -1131,12 +1134,26 @@ def mostrar_marco(usuario_actual):
                     <span>Fecha</span>
                 </div>
                 <div class="labs-status-chip">
-                    <strong id="labs-live-clock">--:--</strong>
+                    <strong id="labs-live-clock">{hora_panel}</strong>
                     <span>Hora local</span>
                 </div>
                 <details class="labs-user-menu">
                     <summary aria-label="Menu de usuario">☰</summary>
                     <div class="labs-user-menu-panel">
+                        <button type="button" id="season-menu-close" aria-label="Cerrar menú">×</button>
+                        <label for="season-menu-mode">Temporada visual</label>
+                        <select id="season-menu-mode" aria-label="Temporada visual">
+                            <option value="auto">Automática por calendario</option>
+                            <option value="standard">Marca institucional</option>
+                            <option value="friendship">Amor y Amistad</option>
+                            <option value="halloween">Halloween</option>
+                            <option value="rain">Noviembre · Lluvia</option>
+                            <option value="christmas">Navidad</option>
+                            <option value="birthday">Cumpleaños · Rosa</option>
+                            <option value="birthday_blue">Cumpleaños · Azul</option>
+                            <option value="colombia">Selección Colombia</option>
+                        </select>
+                        <label class="season-menu-effects"><input id="season-menu-effects" type="checkbox"> Iconos flotantes</label>
                         <a href="/logout" target="_self">Cerrar sesión</a>
                     </div>
                 </details>
@@ -1147,28 +1164,32 @@ def mostrar_marco(usuario_actual):
     )
 
 
+    # El reloj pertenece a la cabecera, no a las páginas con lector de códigos.
+    # Ejecutarlo en la ventana principal evita perder el timer al desmontar iframes.
+    clock_script = """
+        const host = window;
+        if (host.__labsClockTimer) host.clearInterval(host.__labsClockTimer);
+        function updateClock() {
+            const clock = host.document.getElementById("labs-live-clock");
+            if (!clock) return;
+            clock.textContent = new Intl.DateTimeFormat("es-CO", {
+                timeZone: "America/Bogota", hour: "2-digit", minute: "2-digit",
+                hourCycle: "h23"
+            }).format(new Date());
+        }
+        updateClock();
+        host.__labsClockTimer = host.setInterval(updateClock, 1000);
+    """
+    st.iframe("<script>window.parent.Function(" + json.dumps(clock_script) + ")();</script>",
+              height=1, tab_index=-1)
+
+
 def preparar_lector():
     st.components.v1.html(
         """
         <script>
         (function () {
             const doc = window.parent.document;
-            function updateClock() {
-                const clock = doc.getElementById("labs-live-clock");
-                if (!clock) return;
-                const now = new Date();
-                clock.textContent = now.toLocaleTimeString("es-CO", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    hour12: false
-                });
-            }
-            updateClock();
-            if (window.parent.__labsClockTimer) {
-                window.parent.clearInterval(window.parent.__labsClockTimer);
-            }
-            window.parent.__labsClockTimer = window.parent.setInterval(updateClock, 15000);
-
             function normalizeScan(value, allowBase64 = true) {
                 const text = String(value || "").trim();
                 if (!text) return text;
