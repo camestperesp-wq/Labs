@@ -130,6 +130,33 @@ def agregar_multa(codigo, fecha_multa, motivo, sancion, tecnico_asigna, observac
     _invalidar_cache_prestamos()
 
 
+def actualizar_sanciones_tabla(cambios):
+    """Guarda las celdas editadas juntas y evita sobrescribir cambios concurrentes.
+
+    Vaciar Sanción levanta esa sanción; el estado de pago es independiente.
+    """
+    from constants import TECNICOS
+    with db.get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        for multa_id, sancion_anterior, tecnico_anterior, sancion, tecnico in cambios:
+            sancion = str(sancion or "").strip()
+            tecnico = str(tecnico or "").strip()
+            if tecnico and tecnico != tecnico_anterior and tecnico not in TECNICOS:
+                raise ValueError("Selecciona un técnico de la lista.")
+            cursor = conn.execute(
+                """UPDATE multas SET sancion=?,tecnico_asigna=? WHERE id=?
+                   AND coalesce(sancion,'')=? AND coalesce(tecnico_asigna,'')=?""",
+                (sancion, tecnico, int(multa_id), sancion_anterior, tecnico_anterior),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Otra persona modificó una fila. Actualiza la tabla antes de guardar.")
+        conn.commit()
+    db.clear_cache()
+    # Las alertas de préstamos también muestran sanciones generales.
+    import prestamos_pasillos
+    prestamos_pasillos.obtener_alertas_bloqueo.clear()
+
+
 def pagar_multa(id_multa, tecnico_recibe):
     """
     Marca una multa como pagada y registra la fecha actual.

@@ -1223,8 +1223,10 @@ def _datos_celda_seleccionada(sel_lab, sel_fecha, sel_hora, estado):
     }
 
 
-def _seleccionar_celda_reserva(lab, fecha_str, hora, estado):
+def _seleccionar_celda_reserva(lab, fecha_str, hora, estado, posicion_visual=None):
     st.session_state.labs_celda_seleccionada = _datos_celda_seleccionada(lab, fecha_str, hora, estado)
+    if posicion_visual:
+        st.session_state.labs_celda_seleccionada["posicion_visual"] = posicion_visual
     st.session_state.labs_modal_reserva_pendiente = True
     st.session_state.labs_modal_reserva_renderizado = False
     _limpiar_parametros_reserva()
@@ -1413,7 +1415,7 @@ def mostrar_calendario_interactivo(dia_seleccionado):
     )
     with intercambio_col:
         with st.popover("Intercambiar espacio", use_container_width=True):
-            if len(ocupadas) < 2:
+            if len(estados_visuales) < 2:
                 st.info("Se requieren al menos dos espacios ocupados.")
             else:
                 etiquetas = {
@@ -1421,7 +1423,7 @@ def mostrar_calendario_interactivo(dia_seleccionado):
                         f"{clave[0]} · {LABS_NAMES.get(clave[1], clave[1])} · "
                         f"{estado['detalle']}"
                     )
-                    for clave, estado in ocupadas.items()
+                    for clave, estado in estados_visuales.items()
                 }
                 origen = st.selectbox(
                     "Espacio de origen", list(etiquetas),
@@ -1565,7 +1567,8 @@ def mostrar_calendario_interactivo(dia_seleccionado):
                     help=estado["detalle"],
                     use_container_width=True,
                 ):
-                    _seleccionar_celda_reserva(lab, fecha_str, hora, estado)
+                    hora_origen, lab_origen = res.coordenada_origen_visual(fecha_str, hora, lab)
+                    _seleccionar_celda_reserva(lab_origen, fecha_str, hora_origen, estado, (hora, lab))
 
     # El intercambio se resuelve dentro del fragmento mediante el popover
     # superior. No se inyectan listeners globales ni navegación por URL.
@@ -1584,16 +1587,11 @@ def mostrar_calendario_interactivo(dia_seleccionado):
                 if (hora_candidata, lab_candidato) == (origen["hora"], origen["laboratorio"]):
                     continue
                 estado = estado_visual(hora_candidata, lab_candidato)
-                ocupado = bool(
-                    estado.get("tiene_asignatura") or estado.get("reservas_activas")
-                    or estado.get("tiene_profesor") or estado.get("ocupados", 0)
+                clave = f"{hora_candidata}|{lab_candidato}"
+                candidatos[clave] = (
+                    f"{hora_candidata} · {LABS_NAMES.get(lab_candidato, lab_candidato)} · "
+                    f"{estado['detalle']}"
                 )
-                if ocupado:
-                    clave = f"{hora_candidata}|{lab_candidato}"
-                    candidatos[clave] = (
-                        f"{hora_candidata} · {LABS_NAMES.get(lab_candidato, lab_candidato)} · "
-                        f"{estado['detalle']}"
-                    )
         st.caption(f"Cambio temporal únicamente para {formatear_fecha_espanol(fecha_str)}.")
         if not candidatos:
             st.info("No hay otra reserva o clase ocupada disponible ese día.")
@@ -1960,7 +1958,10 @@ def _render_detalle_celda_contenido():
     lab = data["laboratorio"]
     # Recalcular tras marcar asistencia: el modal no debe conservar cupos ocupados obsoletos.
     estado = _obtener_estado_celda(parse_fecha_a_espanol(fecha_str), lab, fecha_str, hora)
+    posicion_visual = data.get("posicion_visual", (hora, lab))
     data = _datos_celda_seleccionada(lab, fecha_str, hora, estado)
+    data["posicion_visual"] = posicion_visual
+    hora_visible, lab_visible = posicion_visual
     st.session_state.labs_celda_seleccionada = data
     ocupados = data["ocupados"]
     total = data["total"]
@@ -1985,13 +1986,15 @@ def _render_detalle_celda_contenido():
         f"""
         <div style="background:linear-gradient(100deg,#731116,#9f1d24); border-bottom:5px solid #d6a81f; border-radius:10px; padding:0.9rem 1.1rem; margin-bottom:0.65rem; color:#fff;">
             <div style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:#ffe99a; font-weight:800;">Laboratorio seleccionado</div>
-            <div style="font-size:clamp(1.55rem,3vw,2.3rem); line-height:1.05; font-weight:950; margin-top:0.2rem;">{LABS_NAMES[lab]}</div>
+            <div style="font-size:clamp(1.55rem,3vw,2.3rem); line-height:1.05; font-weight:950; margin-top:0.2rem;">{LABS_NAMES[lab_visible]}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.write(f"**Fecha:** {formatear_fecha_espanol(fecha_str)}")
     st.write(f"**Hora:** {hora}")
+    if (hora_visible, lab_visible) != (hora, lab):
+        st.caption(f"Grupo completo intercambiado a {LABS_NAMES.get(lab_visible, lab_visible)} · {hora_visible} para este día. Las asistencias se guardan en los registros originales del grupo.")
     st.write(f"**Ocupación:** {ocupados}/{total}")
 
     if asignatura_info:

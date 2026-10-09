@@ -40,9 +40,9 @@ def _render_editor_paginado(df, key, laboratorio=None, tamano=5):
 
 def mostrar_consulta_fecha_lab():
     st.subheader("Consultar por día, laboratorio y hora")
-    fecha = st.date_input("Día", datetime.now().date(), key="labs_fecha_consulta")
-    lab_cons = st.selectbox("Laboratorio", list(LABORATORIOS.keys()), key="labs_lab_consulta")
-    hora_cons = st.selectbox("Hora", ["Todas"] + HORAS, key="labs_hora_consulta")
+    fecha = st.date_input("Fecha de la reserva", datetime.now().date(), key="labs_fecha_consulta", help="Consulta únicamente las reservas de este día.")
+    lab_cons = st.selectbox("Salón de la reserva", list(LABORATORIOS.keys()), key="labs_lab_consulta", format_func=lambda x: LABS_NAMES.get(x, x), help="Solo incluye las reservas del salón seleccionado.")
+    hora_cons = st.selectbox("Bloque horario de la reserva", ["Todas"] + HORAS, key="labs_hora_consulta", help="Todas incluye todos los bloques de la fecha; un bloque limita la consulta a esas dos horas.")
 
     if st.button("Buscar", key="labs_buscar_fecha_lab"):
         st.session_state.pagina_labs_fecha_lab = 1
@@ -228,19 +228,20 @@ def mostrar_busqueda_codigo():
 
 def mostrar_reporte_completo():
     st.subheader("Reporte completo de reservas")
-    st.caption("Incluye reservas de estudiantes (bancos individuales) y docentes (sala completa).")
+    st.caption("Incluye reservas activas por fecha programada, con ambos extremos del rango incluidos. Asistio: asistencia confirmada; No asistio: ausencia registrada; Pendiente: sin confirmación. No incluye reservas canceladas.")
     
     c1, c2 = st.columns(2)
     with c1:
-        fecha_desde = st.date_input("Desde", datetime.now().date() - timedelta(days=30), key="labs_reporte_desde")
+        fecha_desde = st.date_input("Fecha inicial de reservas (incluida)", datetime.now().date() - timedelta(days=30), key="labs_reporte_desde", help="Filtra por la fecha programada de la reserva, no por la fecha en que se registró.")
     with c2:
-        fecha_hasta = st.date_input("Hasta", datetime.now().date(), key="labs_reporte_hasta")
+        fecha_hasta = st.date_input("Fecha final de reservas (incluida)", datetime.now().date(), key="labs_reporte_hasta", help="Incluye las reservas hasta este día completo.")
     
     # Filtro adicional para tipo de reserva
     tipo_reserva = st.selectbox(
         "Tipo de reserva",
         ["Todas", "Estudiantes (bancos individuales)", "Docentes (sala completa)"],
-        key="labs_reporte_tipo"
+        key="labs_reporte_tipo",
+        help="Todas: bancos individuales y salas completas. Estudiantes: banco mayor que cero. Docentes: reserva de sala completa (banco cero)."
     )
     
     if st.button("Generar reporte", key="labs_generar_reporte"):
@@ -309,28 +310,28 @@ def mostrar_reporte_asistencia_docentes():
     Filtra reservas con banco = 0 (sala completa) y codigo = 'PROFESOR'.
     """
     st.subheader(" Reporte de asistencia de docentes")
-    st.caption("Muestra solo las reservas de sala completa (docentes).")
+    st.caption("Incluye reservas activas de sala completa con código PROFESOR. Si: asistencia confirmada; No: inasistencia registrada; vacío: pendiente de confirmar. El rango incluye ambos días.")
     
     c1, c2 = st.columns(2)
     with c1:
         fecha_desde = st.date_input(
             "Desde",
             datetime.now().date() - timedelta(days=30),
-            key="doc_reporte_desde"
+            key="doc_reporte_desde", help="Primera fecha programada de reserva incluida en el informe."
         )
     with c2:
         fecha_hasta = st.date_input(
             "Hasta",
             datetime.now().date(),
-            key="doc_reporte_hasta"
+            key="doc_reporte_hasta", help="Última fecha programada de reserva incluida en el informe."
         )
     
     # Filtro por laboratorio
     lab_filter = st.selectbox(
         "Laboratorio",
         ["Todos"] + list(LABORATORIOS.keys()),
-        format_func=lambda x: "Todos" if x == "Todos" else LABORATORIOS.get(x, x),
-        key="doc_reporte_lab"
+        format_func=lambda x: "Todos los salones" if x == "Todos" else LABS_NAMES.get(x, x),
+        key="doc_reporte_lab", help="Todos los salones incluye todas las reservas docentes; un salón limita el informe a ese espacio."
     )
     
     if st.button("Generar reporte docentes", key="doc_generar_reporte"):
@@ -382,7 +383,7 @@ def mostrar_reporte_asistencia_docentes():
         df_exportar["Estado"] = df_exportar["Estado"].map(
             {"Si": "Asistió", "No": "No asistió"}
         ).fillna("Pendiente")
-        laboratorio_reporte = "Todos los laboratorios" if lab_filter == "Todos" else LABORATORIOS.get(lab_filter, lab_filter)
+        laboratorio_reporte = "Todos los laboratorios" if lab_filter == "Todos" else LABS_NAMES.get(lab_filter, lab_filter)
         excel_docentes = _crear_excel_institucional(
             df_exportar,
             "Reporte de asistencia docente",

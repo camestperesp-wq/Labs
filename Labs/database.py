@@ -121,7 +121,7 @@ def clear_cache():
 
 @st.cache_resource(show_spinner=False)
 def ensure_initialized(database_path):
-    """Ejecuta migraciones una vez por proceso/base, nunca en cada interacción."""
+    """Inicializa la base y las devoluciones por elemento una vez por proceso/base."""
     if Path(database_path).resolve() != DB_PATH.resolve():
         raise ValueError("La ruta no corresponde a la base configurada.")
     init_db()
@@ -304,6 +304,18 @@ def init_db():
             FOREIGN KEY (prestamo_id) REFERENCES prestamos_pasillo(id) ON DELETE CASCADE,
             FOREIGN KEY (equipo_id) REFERENCES equipos_pasillo(id)
         )""")
+        columnas_detalle = {fila[1] for fila in c.execute("PRAGMA table_info(prestamos_pasillo_equipos)")}
+        for columna in ("fecha_retorno", "receptor", "observaciones_entrada"):
+            if columna not in columnas_detalle:
+                c.execute(f"ALTER TABLE prestamos_pasillo_equipos ADD COLUMN {columna} TEXT")
+        c.execute("""UPDATE prestamos_pasillo SET estado='DEVUELTO'
+                     WHERE estado='PRESTADO' AND fecha_retorno IS NOT NULL""")
+        # Los préstamos históricos cerrados tienen todos sus elementos devueltos.
+        c.execute("""UPDATE prestamos_pasillo_equipos SET
+                     fecha_retorno=(SELECT coalesce(p.fecha_retorno, p.fecha_salida)
+                                    FROM prestamos_pasillo p WHERE p.id=prestamo_id)
+                     WHERE fecha_retorno IS NULL AND prestamo_id IN
+                         (SELECT id FROM prestamos_pasillo WHERE estado='DEVUELTO')""")
         c.execute("""CREATE TABLE IF NOT EXISTS multas_prestamos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             prestamo_id INTEGER NOT NULL,

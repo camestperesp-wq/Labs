@@ -69,7 +69,7 @@ def eliminar_equipo(equipo_id):
         activo = conn.execute(
             """SELECT 1 FROM prestamos_pasillo_equipos pe
                JOIN prestamos_pasillo p ON p.id=pe.prestamo_id
-               WHERE pe.equipo_id=? AND p.estado='PRESTADO' LIMIT 1""",
+               WHERE pe.equipo_id=? AND p.estado='PRESTADO' AND p.fecha_retorno IS NULL AND pe.fecha_retorno IS NULL LIMIT 1""",
             (int(equipo_id),),
         ).fetchone()
         if activo:
@@ -147,12 +147,12 @@ def cargar_inventario_excel(archivo):
     return len(registros)
 
 
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS, show_spinner=False)
+@st.cache_data(ttl=0, show_spinner=False)
 def obtener_equipos(solo_disponibles=False):
     prestado_sql = """EXISTS (
         SELECT 1 FROM prestamos_pasillo_equipos pe
         JOIN prestamos_pasillo p ON p.id=pe.prestamo_id
-        WHERE pe.equipo_id=e.id AND p.estado='PRESTADO'
+        WHERE pe.equipo_id=e.id AND p.estado='PRESTADO' AND p.fecha_retorno IS NULL AND pe.fecha_retorno IS NULL
     )"""
     condicion = f"AND (e.consumible=1 OR NOT {prestado_sql})" if solo_disponibles else ""
     with db.get_connection() as conn:
@@ -305,7 +305,7 @@ def _registrar_incumplimientos(conn, prestamo, momento, monto_pago=0, tecnico=No
     return creadas
 
 
-def crear_prestamo(equipos_ids, solicitante, tecnico_entrega, observaciones_salida=""):
+def crear_prestamo(equipos_ids, solicitante, tecnico_entrega, observaciones_salida="", prestamo_activo_id=None):
     solicitante = _texto(est.resolver_codigo(solicitante), "Solicitante")
     tecnico_entrega = _texto(tecnico_entrega, "Técnico responsable")
     ids = list(dict.fromkeys(int(equipo_id) for equipo_id in equipos_ids))
@@ -322,7 +322,7 @@ def crear_prestamo(equipos_ids, solicitante, tecnico_entrega, observaciones_sali
                    AND (e.consumible=1 OR NOT EXISTS (
                        SELECT 1 FROM prestamos_pasillo_equipos pe
                        JOIN prestamos_pasillo p ON p.id=pe.prestamo_id
-                       WHERE pe.equipo_id=e.id AND p.estado='PRESTADO'
+                       WHERE pe.equipo_id=e.id AND p.estado='PRESTADO' AND p.fecha_retorno IS NULL AND pe.fecha_retorno IS NULL
                    ))""",
             ids,
         ).fetchall()
@@ -332,37 +332,100 @@ def crear_prestamo(equipos_ids, solicitante, tecnico_entrega, observaciones_sali
         limite_fpga = (datetime.fromisoformat(fecha_salida) + timedelta(hours=2)).isoformat(
             sep=" ", timespec="seconds"
         ) if contiene_fpga else None
-        cursor = conn.execute(
-            """INSERT INTO prestamos_pasillo
-               (solicitante, tecnico_entrega, fecha_salida, observaciones_salida, limite_fpga)
-               VALUES (?, ?, ?, ?, ?)""",
-            (solicitante, tecnico_entrega, fecha_salida,
-             str(observaciones_salida or "").strip(), limite_fpga),
-        )
-        prestamo_id = cursor.lastrowid
-        conn.executemany(
-            "INSERT INTO prestamos_pasillo_equipos (prestamo_id, equipo_id) VALUES (?, ?)",
-            [(prestamo_id, equipo_id) for equipo_id in ids],
-        )
+        condicion_id = " AND id=?" if prestamo_activo_id is not None else ""
+        parametros_activo = [solicitante, solicitante]
+        if prestamo_activo_id is not None:
+            parametros_activo.append(int(prestamo_activo_id))
+        activo = conn.execute(
+            """SELECT id FROM prestamos_pasillo WHERE (solicitante=? OR EXISTS (
+                   SELECT 1 FROM estudiantes e WHERE e.codigo=? AND e.nombres=solicitante))
+               AND estado='PRESTADO' AND fecha_retorno IS NULL
+            """ + condicion_id + " ORDER BY id DESC LIMIT 1", parametros_activo
+        ).fetchone()
+        if prestamo_activo_id is not None and not activo:
+            raise ValueError("El préstamo seleccionado ya está cerrado o pertenece a otro usuario.")
+        if activo:
+            prestamo_id = activo[0]
+            for equipo_id in ids:
+                anterior = conn.execute(
+                    "SELECT fecha_retorno FROM prestamos_pasillo_equipos WHERE prestamo_id=? AND equipo_id=?",
+                    (prestamo_id, equipo_id),
+                ).fetchone()
+                if anterior and anterior[0] is None:
+                    raise ValueError("Ese elemento ya está en el préstamo activo.")
+                conn.execute(
+                    """INSERT INTO prestamos_pasillo_equipos (prestamo_id,equipo_id)
+                       VALUES (?,?) ON CONFLICT(prestamo_id,equipo_id) DO UPDATE SET
+                       fecha_retorno=NULL,receptor=NULL,observaciones_entrada=NULL""",
+                    (prestamo_id, equipo_id),
+                )
+            conn.execute(
+                """UPDATE prestamos_pasillo SET limite_fpga=coalesce(limite_fpga, ?),
+                   observaciones_salida=coalesce(observaciones_salida,'') || ? WHERE id=?""",
+                (limite_fpga, f"\nAmpliación {fecha_salida} · {tecnico_entrega}: {observaciones_salida}", prestamo_id),
+            )
+        else:
+            cursor = conn.execute(
+                """INSERT INTO prestamos_pasillo
+                   (solicitante, tecnico_entrega, fecha_salida, observaciones_salida, limite_fpga)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (solicitante, tecnico_entrega, fecha_salida,
+                 str(observaciones_salida or "").strip(), limite_fpga),
+            )
+            prestamo_id = cursor.lastrowid
+            conn.executemany(
+                "INSERT INTO prestamos_pasillo_equipos (prestamo_id, equipo_id) VALUES (?, ?)",
+                [(prestamo_id, equipo_id) for equipo_id in ids],
+            )
         conn.commit()
     _invalidar_cache_lecturas()
     return prestamo_id
 
 
 def registrar_devolucion(prestamo_id, receptor, observaciones_entrada="", monto_pago=0,
-                         detalle_multa=""):
+                         detalle_multa="", equipos_ids=None):
     receptor = _texto(receptor, "Receptor")
     fecha_retorno = datetime.now().isoformat(sep=" ", timespec="seconds")
     with db.get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         prestamo = conn.execute(
-            "SELECT id, solicitante, fecha_salida, limite_fpga FROM prestamos_pasillo WHERE id=? AND estado='PRESTADO'",
+            "SELECT id, solicitante, fecha_salida, limite_fpga FROM prestamos_pasillo WHERE id=? AND estado='PRESTADO' AND fecha_retorno IS NULL",
             (int(prestamo_id),),
         ).fetchone()
         if not prestamo:
             raise ValueError("El préstamo no existe o ya fue devuelto.")
+        pendientes = {r[0] for r in conn.execute(
+            "SELECT equipo_id FROM prestamos_pasillo_equipos WHERE prestamo_id=? AND fecha_retorno IS NULL",
+            (int(prestamo_id),),
+        )}
+        seleccion = pendientes if equipos_ids is None else {int(i) for i in equipos_ids}
+        if not seleccion or not seleccion.issubset(pendientes):
+            raise ValueError("Selecciona elementos pendientes de este préstamo.")
+        marcadores = ",".join("?" for _ in seleccion)
+        devuelve_artix = conn.execute(
+            f"SELECT 1 FROM equipos_pasillo WHERE id IN ({marcadores}) AND upper(nombre) LIKE '%ARTIX%'",
+            tuple(seleccion),
+        ).fetchone()
         _registrar_incumplimientos(
-            conn, prestamo, datetime.now(), 0, receptor, detalle_multa, True
+            conn, prestamo, datetime.now(), 0, receptor, detalle_multa, bool(devuelve_artix)
         )
+        conn.executemany(
+            """UPDATE prestamos_pasillo_equipos SET fecha_retorno=?,receptor=?,observaciones_entrada=?
+               WHERE prestamo_id=? AND equipo_id=? AND fecha_retorno IS NULL""",
+            [(fecha_retorno, receptor, str(observaciones_entrada or "").strip(), int(prestamo_id), i)
+             for i in seleccion],
+        )
+        artix_pendiente = conn.execute(
+            """SELECT 1 FROM prestamos_pasillo_equipos pe JOIN equipos_pasillo e ON e.id=pe.equipo_id
+               WHERE pe.prestamo_id=? AND pe.fecha_retorno IS NULL AND upper(e.nombre) LIKE '%ARTIX%'""",
+            (int(prestamo_id),),
+        ).fetchone()
+        if not artix_pendiente and seleccion != pendientes:
+            conn.execute("UPDATE prestamos_pasillo SET limite_fpga=NULL WHERE id=?", (int(prestamo_id),))
+        if seleccion != pendientes:
+            conn.commit()
+            _invalidar_cache_lecturas()
+            return
         cursor = conn.execute(
             """UPDATE prestamos_pasillo
                   SET receptor=?, fecha_retorno=?, observaciones_entrada=?, estado='DEVUELTO'
@@ -373,6 +436,18 @@ def registrar_devolucion(prestamo_id, receptor, observaciones_entrada="", monto_
             raise ValueError("El préstamo no existe o ya fue devuelto.")
         conn.commit()
     _invalidar_cache_lecturas()
+
+
+def obtener_elementos_pendientes(prestamo_id):
+    with db.get_connection() as conn:
+        return pd.read_sql_query(
+            """SELECT e.id,e.nombre,coalesce(e.numero_interno,'') AS numero_interno
+               FROM prestamos_pasillo_equipos pe JOIN equipos_pasillo e ON e.id=pe.equipo_id
+               JOIN prestamos_pasillo p ON p.id=pe.prestamo_id
+               WHERE pe.prestamo_id=? AND pe.fecha_retorno IS NULL
+                 AND p.estado='PRESTADO' AND p.fecha_retorno IS NULL""",
+            conn, params=(int(prestamo_id),),
+        )
 
 
 def renovar_prestamo_fpga(prestamo_id, tecnico, monto_pago=0, detalle_multa=""):
@@ -401,9 +476,11 @@ def sincronizar_incumplimientos():
     return 0  # Las consultas nunca generan sanciones.
 
 
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS, show_spinner=False)
+@st.cache_data(ttl=0, show_spinner=False)
 def obtener_prestamos(estado=None):
     filtro = "WHERE p.estado=?" if estado else ""
+    if estado == "PRESTADO":
+        filtro += " AND p.fecha_retorno IS NULL AND pe.fecha_retorno IS NULL"
     parametros = (estado,) if estado else ()
     with db.get_connection() as conn:
         return pd.read_sql_query(
@@ -445,14 +522,14 @@ def obtener_prestamos(estado=None):
               JOIN equipos_pasillo e ON e.id=pe.equipo_id
               {filtro}
              GROUP BY p.id
-             ORDER BY CASE WHEN p.estado='PRESTADO' THEN 0 ELSE 1 END,
+             ORDER BY CASE WHEN p.estado='PRESTADO' AND p.fecha_retorno IS NULL THEN 0 ELSE 1 END,
                           p.fecha_salida DESC""",
             conn,
             params=parametros,
         )
 
 
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS, show_spinner=False)
+@st.cache_data(ttl=0, show_spinner=False)
 def obtener_prestamos_activos_codigo(codigo):
     """Obtiene solo las salidas pendientes asociadas al código consultado."""
     codigo = est.resolver_codigo(codigo)
@@ -479,7 +556,7 @@ def obtener_prestamos_activos_codigo(codigo):
                  FROM prestamos_pasillo p
                  JOIN prestamos_pasillo_equipos pe ON pe.prestamo_id=p.id
                  JOIN equipos_pasillo e ON e.id=pe.equipo_id
-                WHERE p.estado='PRESTADO'
+                WHERE p.estado='PRESTADO' AND p.fecha_retorno IS NULL AND pe.fecha_retorno IS NULL
                   AND (
                       p.solicitante=?
                       OR EXISTS (

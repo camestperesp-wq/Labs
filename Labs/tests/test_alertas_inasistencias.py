@@ -60,10 +60,13 @@ class RevisionTest(unittest.TestCase):
         for nombre, interno, consumible in [('Cable personalizado', '', True), ('FPGA Basys', 'B', False), ('Artix 7', 'A', False)]:
             prestamos.registrar_equipo('', nombre, interno, consumible)
         equipos = prestamos.obtener_equipos()
+        contiene_artix = False
         for fila in equipos.itertuples():
             prestamo_id = prestamos.crear_prestamo([fila.id], '123', TECNICOS[0])
             limite = db.ejecutar('SELECT limite_fpga FROM prestamos_pasillo WHERE id=?', (prestamo_id,), fetch=True)[0][0]
-            self.assertEqual(bool(limite), 'Artix' in fila.nombre)
+            contiene_artix = contiene_artix or 'Artix' in fila.nombre
+            self.assertEqual(bool(limite), contiene_artix)
+        self.assertEqual(len(prestamos.obtener_prestamos_activos_codigo('123')), 1)
         vista = prestamos.obtener_prestamos_activos_codigo('123')
         self.assertTrue(vista.equipos.str.contains('Cable personalizado', na=False).any())
         db.ejecutar("UPDATE prestamos_pasillo SET fecha_salida=?", (self.fecha + ' 08:00:00',))

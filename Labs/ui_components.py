@@ -1659,6 +1659,7 @@ def mostrar_deudores():
     st.caption("Informe institucional completo para seguimiento administrativo, conciliación de pagos y auditoría.")
     query_detalle = """
         SELECT
+            m.id AS multa_id,
             m.codigo_estudiante,
             e.nombres,
             e.proyecto as carrera,
@@ -1751,11 +1752,39 @@ def mostrar_deudores():
             "tecnico_recibe": "Técnico que recibe",
             "estado": "Estado",
         }
-        df_exportar = df_reporte.rename(columns=nombres_columnas)
+        df_exportar = df_reporte.drop(columns=["multa_id"]).rename(columns=nombres_columnas)
         if df_exportar.empty:
             st.info("No hay multas dentro del rango y estado seleccionados.")
         else:
-            st.dataframe(df_exportar, hide_index=True, use_container_width=True)
+            st.caption("Edita Sanción directamente; déjala vacía para levantarla. El pago se gestiona por separado. En Técnico que asigna, selecciona una opción y arrastra el controlador de la celda hacia abajo para repetirla. Los cambios se guardan al terminar de editar la celda.")
+            tabla = df_reporte.set_index("multa_id").rename(columns=nombres_columnas).fillna("")
+            version_tabla = st.session_state.get("sanciones_tabla_version", 0)
+            editada = st.data_editor(
+                tabla, hide_index=True, width="stretch",
+                key=f"sanciones_inline_{version_tabla}_{desde}_{hasta}_{filtro_estado}",
+                disabled=[c for c in tabla.columns if c not in ("Sanción", "Técnico que asigna")],
+                column_config={
+                    "Sanción": st.column_config.TextColumn("Sanción", help="Escribe para aplicar o modificar; borra el contenido para levantar la sanción."),
+                    "Técnico que asigna": st.column_config.SelectboxColumn(
+                        "Técnico que asigna", options=["", *OPCIONES_TECNICOS[1:],
+                            *sorted(set(tabla["Técnico que asigna"]) - set(OPCIONES_TECNICOS) - {""})],
+                    ),
+                },
+            )
+            cambios = []
+            for multa_id, fila in editada.iterrows():
+                anterior = tabla.loc[multa_id]
+                sancion = "" if pd.isna(fila["Sanción"]) else str(fila["Sanción"])
+                tecnico = "" if pd.isna(fila["Técnico que asigna"]) else str(fila["Técnico que asigna"])
+                if (sancion, tecnico) != (anterior["Sanción"], anterior["Técnico que asigna"]):
+                    cambios.append((multa_id, anterior["Sanción"], anterior["Técnico que asigna"], sancion, tecnico))
+            if cambios:
+                try:
+                    multas.actualizar_sanciones_tabla(cambios)
+                    st.session_state.sanciones_tabla_version = version_tabla + 1
+                    st.rerun()
+                except ValueError as error:
+                    st.error(str(error))
         excel_multas = crear_excel_institucional(
             df_exportar,
             "Reporte detallado de multas",

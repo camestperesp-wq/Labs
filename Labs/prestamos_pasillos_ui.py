@@ -12,13 +12,15 @@ import estudiantes as est
 import prestamos_pasillos as prestamos
 
 
+@st.fragment(run_every="15s")
 def _mostrar_metricas_globales():
     inventario = prestamos.obtener_equipos()
     disponibles = int((inventario["estado"] == "Disponible").sum()) if not inventario.empty else 0
-    total_col, disponible_col, prestado_col = st.columns(3)
+    total_col, disponible_col, prestado_col, activos_col = st.columns(4)
     total_col.metric("Total en inventario", len(inventario))
     disponible_col.metric("Disponibles", disponibles)
-    prestado_col.metric("Actualmente prestados", len(inventario) - disponibles)
+    prestado_col.metric("Actualmente prestados", int((inventario["estado"] == "Prestado").sum()))
+    activos_col.metric("Préstamos abiertos", len(prestamos.obtener_prestamos("PRESTADO")))
 
 
 @st.fragment
@@ -39,7 +41,7 @@ def _mostrar_inventario():
                 try:
                     cantidad = prestamos.cargar_inventario_excel(archivo)
                     st.session_state.pasillos_flash_inventario = f"{cantidad} equipo(s) procesado(s)."
-                    st.rerun(scope="fragment")
+                    st.rerun()
                 except (ValueError, TypeError) as error:
                     st.error(str(error))
                 except Exception as error:
@@ -69,7 +71,7 @@ def _mostrar_inventario():
                 try:
                     prestamos.registrar_equipo(placa, nombre, numero_interno, consumible=consumible)
                     st.session_state.pasillos_flash_inventario = "Equipo registrado correctamente."
-                    st.rerun(scope="fragment")
+                    st.rerun()
                 except ValueError as error:
                     st.error(str(error))
 
@@ -106,7 +108,7 @@ def _mostrar_inventario():
                 try:
                     prestamos.eliminar_equipo(equipo_id)
                     st.session_state.pasillos_flash_inventario = "Equipo eliminado del inventario."
-                    st.rerun(scope="fragment")
+                    st.rerun()
                 except ValueError as error:
                     st.error(str(error))
 
@@ -174,6 +176,10 @@ def _mostrar_nuevo_prestamo():
     elif codigo_solicitante:
         st.markdown("**Código no encontrado.** Puedes continuar con el registro de la salida.")
 
+    activos_usuario = prestamos.obtener_prestamos_activos_codigo(codigo_solicitante)
+    if not activos_usuario.empty:
+        st.info("Los nuevos elementos se agregarán al préstamo activo. Puedes devolver parte de ellos en Devoluciones.")
+        st.write(activos_usuario[["id", "equipos"]])
     alertas = prestamos.obtener_alertas_bloqueo(codigo_solicitante)
     if alertas:
         st.error("ALERTA CRÍTICA: el estudiante tiene incumplimientos pendientes.")
@@ -210,7 +216,7 @@ def _mostrar_nuevo_prestamo():
                 codigo_key, equipos_key, tecnico_key, observaciones_key, autorizacion_key
             ]
             st.session_state.pasillos_salida_version = version + 1
-            st.rerun(scope="fragment")
+            st.rerun()
         except ValueError as error:
             st.error(str(error))
 
@@ -250,6 +256,38 @@ def _mostrar_devoluciones():
             st.write(f"**Equipos:** {detalle['equipos']}")
             st.write(f"**Técnico que entregó:** {detalle['tecnico_entrega']}")
             st.write(f"**Fecha y hora de salida:** {detalle['fecha_salida']}")
+            disponibles = prestamos.obtener_equipos(solo_disponibles=True)
+            ya_prestados = set(prestamos.obtener_elementos_pendientes(prestamo_id)["id"])
+            opciones_agregar = {
+                int(r["id"]): f"{r['nombre']} · {r['numero_interno']}"
+                for _, r in disponibles.iterrows() if int(r["id"]) not in ya_prestados
+            }
+            if opciones_agregar:
+                alertas_ampliacion = prestamos.obtener_alertas_bloqueo(detalle["solicitante"])
+                with st.form(f"ampliar_prestamo_{prestamo_id}"):
+                    nuevos = st.multiselect("Agregar elementos a este préstamo", list(opciones_agregar),
+                                             format_func=lambda i: opciones_agregar[i])
+                    tecnico_ampliacion = st.selectbox("Técnico que entrega los nuevos elementos", tecnicos)
+                    observacion_ampliacion = st.text_input("Observaciones de los nuevos elementos")
+                    autorizacion_ampliacion = False
+                    if alertas_ampliacion:
+                        st.error("Este usuario tiene incumplimientos pendientes.")
+                        for alerta in alertas_ampliacion:
+                            st.write(alerta)
+                        autorizacion_ampliacion = st.checkbox("Autorizo excepcionalmente esta ampliación bajo mi responsabilidad")
+                    ampliar = st.form_submit_button("Agregar al préstamo activo")
+                if ampliar:
+                    try:
+                        if not es_tecnico_valido(tecnico_ampliacion):
+                            raise ValueError("Selecciona el técnico responsable de la entrega.")
+                        if alertas_ampliacion and not autorizacion_ampliacion:
+                            raise ValueError("Debes autorizar la ampliación por los incumplimientos pendientes.")
+                        prestamos.crear_prestamo(nuevos, detalle["solicitante"], tecnico_ampliacion,
+                                                observacion_ampliacion, prestamo_activo_id=prestamo_id)
+                        st.session_state.pasillos_flash_devolucion = "Elementos agregados al préstamo activo."
+                        st.rerun()
+                    except ValueError as error:
+                        st.error(str(error))
             if es_fpga:
                 st.write(
                     f"**Límite Artix:** {detalle['limite_fpga']} · "
@@ -263,7 +301,18 @@ def _mostrar_devoluciones():
             if not fpga_vencida and not dia_vencido:
                 st.success("Sin alertas de tiempo vencido.")
 
+            pendientes = prestamos.obtener_elementos_pendientes(prestamo_id)
+            etiquetas_pendientes = {
+                int(r["id"]): f"{r['nombre']} · {r['numero_interno']}"
+                for _, r in pendientes.iterrows()
+            }
             with st.form(f"pasillos_devolucion_{prestamo_id}"):
+                equipos_devolver = st.multiselect(
+                    "Elementos que devuelve ahora", list(etiquetas_pendientes),
+                    default=list(etiquetas_pendientes),
+                    format_func=lambda i: etiquetas_pendientes[i],
+                    help="Selecciona solo los que recibes. Los demás siguen prestados en este registro.",
+                )
                 receptor = st.selectbox("Técnico responsable *", tecnicos)
                 detalle_multa = st.text_area(
                     "Registro de la multa por retraso *",
@@ -287,10 +336,10 @@ def _mostrar_devoluciones():
                         else:
                             prestamos.registrar_devolucion(
                                 prestamo_id, receptor, observaciones,
-                                detalle_multa=detalle_multa,
+                                detalle_multa=detalle_multa, equipos_ids=equipos_devolver,
                             )
                             st.session_state.pasillos_flash_devolucion = "Devolución registrada correctamente."
-                        st.rerun(scope="fragment")
+                        st.rerun()
                     except ValueError as error:
                         st.error(str(error))
 
