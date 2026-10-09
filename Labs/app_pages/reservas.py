@@ -113,4 +113,13 @@ cal.mostrar_formulario_asistencia_docente()
 panel_reportes = st.expander("Reportes y descarga de reservas", on_change="rerun")
 if panel_reportes.open:
     with panel_reportes:
-        rep.mostrar_reporte_completo()
+        tipo_reporte = st.segmented_control(
+            "Contenido del reporte", ["Reservas registradas", "Asistencia docente", "Ocupación de salones"],
+            default="Reservas registradas", key="tipo_reporte_reservas",
+        )
+        if tipo_reporte == "Ocupación de salones":
+            rep.mostrar_reporte_ocupacion()
+        elif tipo_reporte == "Asistencia docente":
+            rep.mostrar_reporte_asistencia_docentes()
+        else:
+            rep.mostrar_reporte_completo()

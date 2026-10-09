@@ -409,6 +409,7 @@ def get_reporte_docentes(fecha_desde, fecha_hasta):
         WHERE fecha BETWEEN ? AND ? 
         AND banco = 0 
         AND codigo = 'PROFESOR'
+        AND activo=1
         ORDER BY laboratorio, fecha, hora
     """, (fecha_desde, fecha_hasta))
 

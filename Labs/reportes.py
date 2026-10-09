@@ -4,12 +4,13 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
-from constants import LABORATORIOS, HORAS, LABS_NAMES
+from constants import LABORATORIOS, HORAS, LABS_NAMES, DIAS
 import reservas as res
 import prestamos_pasillos as prestamos_pasillos_data
 import estudiantes as est
 import database as db
 import multas
+from analitica_reportes import analizar_registros, mostrar_analitica, completar_excel
 from ui_components import render_editor_asistencias
 from exportaciones import crear_excel_institucional as _crear_excel_institucional
 
@@ -226,6 +227,202 @@ def mostrar_busqueda_codigo():
                         unsafe_allow_html=True,
                     )
 
+def obtener_reporte_ocupacion(fecha_desde, fecha_hasta):
+    """Proyecta el horario vigente y los registros del día, una fila por salón/bloque."""
+    import calendario as cal
+    if fecha_desde > fecha_hasta:
+        raise ValueError("La fecha inicial no puede ser posterior a la final.")
+    filas = []
+    fecha = fecha_desde
+    while fecha <= fecha_hasta:
+        fecha_str = fecha.isoformat()
+        dia = DIAS[fecha.weekday()] if fecha.weekday() < len(DIAS) else "Domingo"
+        contexto = cal._build_contexto_calendario(dia, fecha_str)
+        mapa = res.obtener_intercambios_fecha(fecha_str)
+        for hora in HORAS:
+            for lab in LABORATORIOS:
+                origen = mapa.get(f"{hora}|{lab}", f"{hora}|{lab}")
+                hora_base, lab_base = origen.split("|", 1)
+                estado = cal._obtener_estado_celda(dia, lab_base, fecha_str, hora_base, contexto)
+                if (hora_base, lab_base) != (hora, lab):
+                    estado = cal._ajustar_capacidad_destino(estado, fecha_str, hora_base, lab_base, lab)
+                horario = estado.get("horario") or {}
+                adicional = cal._es_bloque_reservable(horario.get("asignatura"), horario.get("carrera"))
+                if adicional:
+                    tipo = "Práctica libre" if "práctica" in str(horario.get("carrera", "")).casefold() or "practica" in str(horario.get("asignatura", "")).casefold() else "Adicional"
+                elif estado["tiene_asignatura"]:
+                    tipo = "Clase fija"
+                elif estado["tiene_profesor"]:
+                    tipo = "Reserva docente"
+                elif estado["reservas_activas"]:
+                    tipo = "Reserva individual"
+                else:
+                    tipo = "Libre"
+                docente = estado["profesor_nombre"] or horario.get("profesor") or ""
+                asistencia = {"Si": "Asistió", "No": "No asistió"}.get(
+                    estado["estado_profesor"], "Pendiente" if docente else "No aplica"
+                )
+                filas.append({
+                    "Fecha": fecha_str, "Hora": hora, "Salón": LABS_NAMES.get(lab, lab),
+                    "Tipo": tipo, "Actividad": horario.get("asignatura") or estado["profesor_asignatura"] or "",
+                    "Docente": docente, "Monitor": estado.get("monitor") or "",
+                    "Asistencia docente": asistencia, "Capacidad física": estado["total"],
+                    "Bancos ocupados o bloqueados": estado["ocupados"], "Bancos disponibles": estado["disponibles"],
+                })
+        fecha += timedelta(days=1)
+    return pd.DataFrame(filas)
+
+
+def resumir_ocupacion(tabla):
+    """Índices ponderados por capacidad, sobre todos los bloques seleccionados."""
+    capacidad = tabla["Capacidad física"].sum()
+    ocupados = tabla["Bancos ocupados o bloqueados"].sum()
+    confirmados = tabla["Asistencia docente"].isin(["Asistió", "No asistió"])
+    resumen = {
+        "Índice de ocupación (%)": 100 * ocupados / capacidad if capacidad else 0,
+        "Bloques con ocupación (%)": 100 * tabla["Bancos ocupados o bloqueados"].gt(0).mean() if len(tabla) else 0,
+        "Promedio de bancos por bloque": ocupados / len(tabla) if len(tabla) else 0,
+        "Asistencia docente (%)": 100 * tabla["Asistencia docente"].eq("Asistió").sum() / confirmados.sum() if confirmados.any() else None,
+        "Asistencias docentes confirmadas": int(confirmados.sum()),
+        "Asistencias docentes pendientes": int(tabla["Asistencia docente"].eq("Pendiente").sum()),
+        "Capacidad acumulada (banco-bloques de 2 h)": int(capacidad),
+    }
+    series = {}
+    for columna in ("Salón", "Fecha", "Hora"):
+        agrupado = tabla.groupby(columna, as_index=False)[["Capacidad física", "Bancos ocupados o bloqueados"]].sum()
+        agrupado["Ocupación (%)"] = (100 * agrupado["Bancos ocupados o bloqueados"] / agrupado["Capacidad física"].replace(0, float("nan"))).fillna(0)
+        agrupado = agrupado.rename(columns={
+            "Capacidad física": "Capacidad acumulada (banco-bloques de 2 h)",
+            "Bancos ocupados o bloqueados": "Ocupación acumulada (banco-bloques de 2 h)",
+        })
+        series[columna] = agrupado
+    return resumen, series
+
+
+def _agregar_estadisticas_excel(excel, resumen, series):
+    import io
+    from openpyxl import load_workbook
+    from openpyxl.chart import BarChart, LineChart, Reference
+    from openpyxl.utils.dataframe import dataframe_to_rows
+    libro = load_workbook(io.BytesIO(excel))
+    hoja = libro.create_sheet("Indicadores")
+    hoja.append(["Indicador", "Valor"])
+    for nombre, valor in resumen.items():
+        hoja.append([nombre, None if valor is None else float(valor)])
+    hoja.append(["Base de cálculo", "Todos los bloques del rango y salón seleccionados, incluidos los libres."])
+    hoja.append(["Unidad de capacidad acumulada", "Un banco disponible durante un bloque de 2 horas. No es el número de bancos físicos distintos."])
+    hoja.append(["Horario analizado", f"{HORAS[0][:5]} a {HORAS[-1][-5:]} · {len(HORAS)} bloques de 2 horas por día, incluidos todos los días del rango."])
+    hoja.append(["Interpretación", "Ocupación programada o bloqueada; no equivale a presencia confirmada."])
+    hoja.append(["Asistencia docente", "Asistió / (Asistió + No asistió); pendientes excluidos."])
+    hoja.column_dimensions["A"].width = 42
+    hoja.column_dimensions["B"].width = 90
+    for columna, datos in series.items():
+        hoja = libro.create_sheet(f"Por {columna.lower()}")
+        for fila in dataframe_to_rows(datos, index=False, header=True):
+            hoja.append(fila)
+        grafica = LineChart() if columna == "Fecha" else BarChart()
+        grafica.title = f"Ocupación por {columna.lower()}"
+        grafica.y_axis.title = "Ocupación (%)"
+        grafica.x_axis.title = columna
+        grafica.add_data(Reference(hoja, min_col=4, min_row=1, max_row=hoja.max_row), titles_from_data=True)
+        grafica.set_categories(Reference(hoja, min_col=1, min_row=2, max_row=hoja.max_row))
+        hoja.add_chart(grafica, "F2")
+        for letra in "ABCD":
+            hoja.column_dimensions[letra].width = 28
+    salida = io.BytesIO()
+    libro.save(salida)
+    return salida.getvalue()
+
+
+def mostrar_reporte_ocupacion():
+    st.subheader("Ocupación de salones y asistencia docente")
+    st.caption("Incluye clases fijas, adicionales, prácticas libres y reservas. Una fila representa un salón y bloque de dos horas. Los bancos ocupados o bloqueados incluyen la ocupación programada: no equivalen a personas cuya asistencia fue confirmada.")
+    with st.form("filtros_ocupacion_salones"):
+        desde_col, hasta_col = st.columns(2)
+        desde = desde_col.date_input("Fecha inicial (incluida)", datetime.now().date(),
+                                     help="Proyecta el horario semanal actual al rango elegido; no reconstruye versiones anteriores del horario.")
+        hasta = hasta_col.date_input("Fecha final (incluida)", datetime.now().date())
+        salon = st.selectbox("Salón incluido", ["Todos", *LABORATORIOS],
+                             format_func=lambda valor: "Todos los salones" if valor == "Todos" else LABS_NAMES.get(valor, valor))
+        incluir_libres = st.checkbox("Incluir bloques sin clase, adicional ni reserva", value=False)
+        generar = st.form_submit_button("Generar reporte de ocupación")
+    if generar:
+        if desde > hasta:
+            st.error("La fecha inicial no puede ser posterior a la final.")
+            return
+        st.session_state.reporte_ocupacion_filtros = (desde, hasta, salon, incluir_libres)
+    parametros = st.session_state.get("reporte_ocupacion_filtros")
+    if not parametros:
+        return
+    desde, hasta, salon, incluir_libres = parametros
+    tabla = obtener_reporte_ocupacion(desde, hasta)
+    if salon != "Todos":
+        tabla = tabla[tabla["Salón"] == LABS_NAMES.get(salon, salon)]
+    resumen, series = resumir_ocupacion(tabla)
+    bancos_fisicos = sum(LABORATORIOS.values()) if salon == "Todos" else LABORATORIOS[salon]
+    dias = (hasta - desde).days + 1
+    capacidad_acumulada = resumen["Capacidad acumulada (banco-bloques de 2 h)"]
+    st.caption(f"Base de cálculo: {dias} días calendario · {HORAS[0][:5]}–{HORAS[-1][-5:]} · {len(HORAS)} bloques diarios de 2 h. Capacidad simultánea del conjunto seleccionado: {bancos_fisicos} bancos. Capacidad acumulada: {capacidad_acumulada} banco-bloques de 2 h; ponderada por la capacidad individual de cada salón.")
+    with st.expander("Capacidades por salón y metodología"):
+        st.table(pd.DataFrame([
+            {"Salón": LABS_NAMES.get(lab, lab), "Bancos físicos": capacidad}
+            for lab, capacidad in LABORATORIOS.items() if salon == "Todos" or lab == salon
+        ]))
+        st.markdown("**Ocupación global (%)** = 100 × Σ bancos ocupados o bloqueados por salón y bloque / Σ capacidad física de cada salón y bloque. Es una tasa ponderada por capacidad, no el promedio simple de los porcentajes de los salones.")
+    tabla["Ocupación (%)"] = (100 * tabla["Bancos ocupados o bloqueados"] / tabla["Capacidad física"].replace(0, float("nan"))).fillna(0).round(2)
+    st.caption("Los indicadores incluyen todos los bloques del rango y salón elegidos, también los libres. La casilla de bloques libres solo cambia las filas visibles del detalle.")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Índice de ocupación", f"{resumen['Índice de ocupación (%)']:.1f}%",
+              help="Suma de bancos ocupados o bloqueados / suma de capacidad física de todos los bloques. Ponderado por capacidad.")
+    c2.metric("Bloques con ocupación", f"{resumen['Bloques con ocupación (%)']:.1f}%",
+              help="Bloques con al menos un banco ocupado o bloqueado / todos los bloques disponibles.")
+    c3.metric("Bancos por bloque", f"{resumen['Promedio de bancos por bloque']:.1f}",
+              help="Promedio de bancos ocupados o bloqueados por salón y bloque de dos horas, incluidos los libres.")
+    asistencia = resumen["Asistencia docente (%)"]
+    c4.metric("Asistencia docente", "Sin confirmar" if asistencia is None else f"{asistencia:.1f}%",
+              help="Asistió / (Asistió + No asistió). Las asistencias pendientes no entran en este porcentaje.")
+    st.caption(f"Asistencia docente: {resumen['Asistencias docentes confirmadas']} registros confirmados y {resumen['Asistencias docentes pendientes']} pendientes.")
+    st.markdown("#### Índices de ocupación")
+    st.caption("Porcentaje de bancos ocupados o bloqueados respecto de la capacidad disponible en cada agrupación.")
+    st.bar_chart(series["Salón"], x="Salón", y="Ocupación (%)", width="stretch")
+    st.line_chart(series["Fecha"], x="Fecha", y="Ocupación (%)", width="stretch")
+    st.bar_chart(series["Hora"], x="Hora", y="Ocupación (%)", width="stretch")
+    if not incluir_libres:
+        tabla = tabla[tabla["Tipo"] != "Libre"]
+    st.caption(f"Resultado generado: {desde:%d/%m/%Y} al {hasta:%d/%m/%Y} · {LABS_NAMES.get(salon, 'Todos los salones')}")
+    if tabla.empty:
+        st.info("No hay bloques que coincidan con estos filtros.")
+        return
+    detalle = tabla.rename(columns={"Capacidad física": "Bancos físicos del salón (por bloque)"})
+    st.dataframe(detalle, hide_index=True, width="stretch",
+                 column_config={"Bancos físicos del salón (por bloque)": st.column_config.NumberColumn(
+                     help="Cantidad fija de bancos del salón de esta fila, durante el bloque indicado en Hora. No es una suma por día.")})
+    excel = _crear_excel_institucional(
+        detalle, "Ocupación de salones y asistencia docente",
+        "Horario vigente y registros de reservas; ocupación programada y asistencia registrada",
+        [("Periodo", f"{desde:%d/%m/%Y} al {hasta:%d/%m/%Y}"),
+         ("Salón", LABS_NAMES.get(salon, "Todos los salones")), ("Bloques incluidos", len(tabla))],
+    )
+    excel = _agregar_estadisticas_excel(excel, resumen, series)
+    excel = completar_excel(excel, ficha=[
+        ("Unidad de análisis", "Un salón en un bloque de dos horas. Capacidad individual según hoja Capacidades por salón."),
+        ("Horario analizado", f"{HORAS[0][:5]}–{HORAS[-1][-5:]}; {len(HORAS)} bloques diarios"),
+        ("Días analizados", f"{dias} días calendario, incluidos fines de semana y días sin registros"),
+        ("Ocupación global (%)", "100 × suma de bancos ocupados o bloqueados en cada salón-bloque / suma de capacidades individuales en cada salón-bloque. Ponderación por capacidad; no promedio simple entre salones."),
+        ("Capacidad acumulada", f"{capacidad_acumulada} banco-bloques de 2 h. Cada capacidad individual se multiplica por los bloques y días del periodo."),
+        ("Bloques con ocupación (%)", "100 × bloques con al menos un banco ocupado o bloqueado / total de salón-bloques seleccionados."),
+        ("Promedio de bancos por bloque", "Suma de bancos ocupados o bloqueados / total de salón-bloques, incluidos los libres."),
+        ("Asistencia docente (%)", "100 × Asistió / (Asistió + No asistió). Pendientes excluidos; sin confirmaciones: no disponible."),
+        ("Fuente y alcance", "Horario semanal vigente proyectado al periodo y registros activos de reservas. No reconstruye versiones históricas. Incluye intercambios temporales de la sesión actual."),
+        ("Detalle y agregaciones", "La opción de ocultar bloques libres afecta solo el detalle exportado. Indicadores y gráficas mantienen todos los bloques del rango y salones seleccionados."),
+        ("Ocupación y presencia", "La ocupación programada o bloqueada no equivale a personas con asistencia confirmada."),
+    ], filtros=[("Periodo", f"{desde} a {hasta}"), ("Salón", LABS_NAMES.get(salon, "Todos")),
+                ("Detalle incluye bloques libres", incluir_libres)])
+    st.download_button("Descargar ocupación en Excel", excel,
+                       f"ocupacion_salones_{desde:%Y%m%d}_{hasta:%Y%m%d}.xlsx",
+                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
 def mostrar_reporte_completo():
     st.subheader("Reporte completo de reservas")
     st.caption("Incluye reservas activas por fecha programada, con ambos extremos del rango incluidos. Asistio: asistencia confirmada; No asistio: ausencia registrada; Pendiente: sin confirmación. No incluye reservas canceladas.")
@@ -274,6 +471,8 @@ def mostrar_reporte_completo():
                 "tecnico": "Técnico", "estado": "Estado",
             }
             df_exportar = df.rename(columns=etiquetas)
+            indicadores, series, ficha = analizar_registros(df_exportar, "Fecha", "Estado", fecha_desde, fecha_hasta, "Laboratorio", asistencia=True)
+            mostrar_analitica(indicadores, series)
             excel = _crear_excel_institucional(
                 df_exportar,
                 "Reporte ejecutivo de reservas",
@@ -284,6 +483,8 @@ def mostrar_reporte_completo():
                     ("Total de registros", len(df_exportar)),
                 ],
             )
+            excel = completar_excel(excel, indicadores, series, ficha,
+                                   filtros=[("Tipo de reserva", tipo_reserva), ("Fuente", "Reservas activas; no incluye clases fijas sin registro de asistencia o reserva.")])
             st.download_button(
                 "Descargar Excel institucional",
                 excel,
@@ -384,6 +585,8 @@ def mostrar_reporte_asistencia_docentes():
             {"Si": "Asistió", "No": "No asistió"}
         ).fillna("Pendiente")
         laboratorio_reporte = "Todos los laboratorios" if lab_filter == "Todos" else LABS_NAMES.get(lab_filter, lab_filter)
+        indicadores, series, ficha = analizar_registros(df_exportar, "Fecha", "Estado", fecha_desde, fecha_hasta, "Laboratorio", asistencia=True)
+        mostrar_analitica(indicadores, series)
         excel_docentes = _crear_excel_institucional(
             df_exportar,
             "Reporte de asistencia docente",
@@ -396,6 +599,8 @@ def mostrar_reporte_asistencia_docentes():
                 ("No asistieron", int((df["asiste"] == "No").sum())),
             ],
         )
+        excel_docentes = completar_excel(excel_docentes, indicadores, series, ficha,
+                                         filtros=[("Salón", laboratorio_reporte), ("Fuente", "Registros activos con código PROFESOR y banco cero; incluye asistencia registrada de clases fijas.")])
         st.download_button(
             "Descargar Excel institucional",
             excel_docentes,

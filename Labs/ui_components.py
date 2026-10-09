@@ -13,6 +13,7 @@ import reservas as res
 import horario_fijo as hf
 import multas
 from exportaciones import crear_excel_institucional
+from analitica_reportes import analizar_registros, mostrar_analitica, completar_excel
 from constants import DIAS, HORAS, LABS_NAMES_HORARIO, LABS_HORARIO, OPCIONES_TECNICOS, es_tecnico_valido, LABS_ORDEN_HORARIO, LABORATORIOS
 
 
@@ -1800,6 +1801,9 @@ def mostrar_deudores():
                     st.rerun()
                 except ValueError as error:
                     st.error(str(error))
+        indicadores, series, ficha = analizar_registros(df_exportar, "Fecha de multa", "Estado", desde, hasta, "Técnico que asigna")
+        ficha.append(("Unidad de multa", "Un registro de multa, no una persona única. Estado según su situación actual de pago; periodo filtrado por fecha de imposición, no por fecha de pago."))
+        mostrar_analitica(indicadores, series)
         excel_multas = crear_excel_institucional(
             df_exportar,
             "Reporte detallado de multas",
@@ -1815,6 +1819,7 @@ def mostrar_deudores():
             ],
             nombre_hoja="Multas",
         )
+        excel_multas = completar_excel(excel_multas, indicadores, series, ficha, filtros=[("Estado", filtro_estado), ("Fuente", "Multas registradas; fechas inválidas excluidas del rango.")])
         descarga_key = (
             f"descargar_deudores_detalle_{desde.isoformat()}_{hasta.isoformat()}_"
             f"{filtro_estado}_{total_reporte}"

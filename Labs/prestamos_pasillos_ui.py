@@ -8,6 +8,7 @@ import streamlit as st
 
 from constants import es_tecnico_valido
 from exportaciones import crear_excel_institucional
+from analitica_reportes import analizar_registros, mostrar_analitica, completar_excel
 import estudiantes as est
 import prestamos_pasillos as prestamos
 
@@ -395,6 +396,9 @@ def _mostrar_historial():
         "Observaciones de salida", "Receptor", "Retorno",
         "Observaciones de entrada", "Estado", "Multas asociadas",
     ]
+    indicadores, series, ficha = analizar_registros(vista, "Salida", "Estado", desde, hasta, "Técnico de entrega")
+    ficha.append(("Unidad del préstamo", "Un registro agrupa una sesión activa y puede contener varios equipos y devoluciones parciales. No equivale al número de equipos."))
+    mostrar_analitica(indicadores, series)
     excel = crear_excel_institucional(
         vista[columnas_exportar],
         "Historial de préstamos de pasillos",
@@ -406,6 +410,7 @@ def _mostrar_historial():
         ],
         nombre_hoja="Prestamos",
     )
+    excel = completar_excel(excel, indicadores, series, ficha, filtros=[("Estado", filtro), ("Fuente", "Historial de préstamos de pasillo; filtrado por fecha de salida.")])
     st.download_button(
         "Descargar historial en Excel",
         data=excel,
