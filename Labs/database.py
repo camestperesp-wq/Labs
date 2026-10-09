@@ -121,7 +121,7 @@ def clear_cache():
 
 @st.cache_resource(show_spinner=False)
 def ensure_initialized(database_path):
-    """Inicializa la base y las devoluciones por elemento una vez por proceso/base."""
+    """Inicializa la base, devoluciones por elemento y monitores por sesión."""
     if Path(database_path).resolve() != DB_PATH.resolve():
         raise ValueError("La ruta no corresponde a la base configurada.")
     init_db()
@@ -157,6 +157,14 @@ def init_db():
             c.execute("ALTER TABLE reservas ADD COLUMN activo INTEGER DEFAULT 1")
         if "proyecto" not in columnas_reservas:
             c.execute("ALTER TABLE reservas ADD COLUMN proyecto TEXT")
+
+        c.execute("""CREATE TABLE IF NOT EXISTS monitores_sesion (
+            fecha TEXT NOT NULL,
+            hora TEXT NOT NULL,
+            laboratorio TEXT NOT NULL,
+            monitor TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (fecha, hora, laboratorio)
+        )""")
 
         c.execute("""CREATE TABLE IF NOT EXISTS estudiantes (
             codigo TEXT PRIMARY KEY,

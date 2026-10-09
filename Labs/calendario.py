@@ -1071,7 +1071,8 @@ def _build_contexto_calendario(dia_seleccionado, fecha_str):
         for hora_horario, lab_horario, asignatura, carrera, monitor, profesor in horarios
     }
 
-    return {"slots": slots, "horarios": horarios_por_celda}
+    return {"slots": slots, "horarios": horarios_por_celda,
+            "monitores": res.obtener_monitores_sesion(fecha_str)}
 
 
 def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None):
@@ -1140,6 +1141,11 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
         )
         reservas_activas = r[0][0] > 0
 
+    monitores_sesion = contexto.get("monitores", {}) if contexto else res.obtener_monitores_sesion(fecha_str)
+    monitor_sesion = monitores_sesion.get((hora, lab), (horario or {}).get("monitor", ""))
+    if horario:
+        horario = dict(horario, monitor=monitor_sesion)
+
     disponibles = total - ocupados
 
     tiene_profesor = bool(profesor_nombre or estado_profesor)
@@ -1193,7 +1199,12 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
         if not es_prestamo_docente and horario:
             etiqueta += "\n" + _nombre_en_celda("Monitor", horario.get("monitor"))
 
+    if not horario and monitor_sesion:
+        etiqueta += "\n" + _nombre_en_celda("Monitor", monitor_sesion)
+        detalle += f" | Monitor: {monitor_sesion}"
+
     return {
+        "monitor": monitor_sesion,
         "total": total,
         "ocupados": ocupados,
         "disponibles": disponibles,
@@ -1229,6 +1240,8 @@ def _ajustar_capacidad_destino(estado, fecha, hora_base, lab_base, lab_destino):
                 resultado["etiqueta"] += "\n" + str(estado["horario"].get("asignatura") or "")
         else:
             resultado["etiqueta"] = f"Ocupado\n{resumen}"
+        if estado.get("monitor") and not estado.get("horario"):
+            resultado["etiqueta"] += "\n" + _nombre_en_celda("Monitor", estado["monitor"])
     return resultado
 
 
@@ -2051,6 +2064,36 @@ def _render_detalle_celda_contenido():
         st.write("**Tipo / proyecto:**", asignatura_info.get("carrera") or "Sin especificar")
         st.write("**Docente:**", asignatura_info.get("profesor") or "Sin asignar")
         st.write("**Monitor:**", asignatura_info.get("monitor") or "Sin asignar")
+
+    # La asignación sigue al grupo cuando hay un intercambio temporal.
+    monitor_actual = res.obtener_monitores_sesion(fecha_str).get(
+        (hora, lab), (asignatura_info or {}).get("monitor", "")
+    )
+    if not asignatura_info:
+        st.write("**Monitor:**", monitor_actual or "Sin asignar")
+    with st.expander("Asignar o cambiar monitor"):
+        opciones_monitor = ["", *hf.obtener_monitores()]
+        if monitor_actual and monitor_actual not in opciones_monitor:
+            opciones_monitor.insert(0, "__conservar_actual__")
+            seleccionado = "__conservar_actual__"
+        else:
+            seleccionado = monitor_actual or ""
+        with st.form(f"monitor_sesion_{lab}_{fecha_str}_{hora}"):
+            nuevo_monitor = st.selectbox(
+                "Monitor de esta sesión", opciones_monitor,
+                index=opciones_monitor.index(seleccionado),
+                format_func=lambda valor: (f"Conservar actual: {monitor_actual}" if valor == "__conservar_actual__"
+                                          else valor or "Sin monitor asignado"),
+                help="Se aplica solo a este día y bloque; el horario semanal conserva su monitor.",
+            )
+            guardar_monitor = st.form_submit_button("Guardar monitor")
+        if guardar_monitor:
+            try:
+                if nuevo_monitor != "__conservar_actual__":
+                    res.asignar_monitor_sesion(fecha_str, hora, lab, nuevo_monitor)
+                st.rerun()
+            except ValueError as error:
+                st.error(str(error))
 
     df = res.get_reservas_fecha_lab_hora(fecha_str, lab, hora)
 

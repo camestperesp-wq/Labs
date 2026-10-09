@@ -12,6 +12,28 @@ from numbers import Integral
 CLAVE_INTERCAMBIOS_RESERVAS = "intercambios_reservas_por_fecha"
 
 
+def obtener_monitores_sesion(fecha):
+    filas = db.ejecutar(
+        "SELECT hora,laboratorio,monitor FROM monitores_sesion WHERE fecha=?", (fecha,), fetch=True,
+    )
+    return {(hora, laboratorio): monitor for hora, laboratorio, monitor in filas}
+
+
+def asignar_monitor_sesion(fecha, hora, laboratorio, monitor):
+    import horario_fijo as hf
+    from constants import HORAS
+    if laboratorio not in LABORATORIOS or hora not in HORAS:
+        raise ValueError("Selecciona un salón y bloque válidos.")
+    datetime.strptime(fecha, "%Y-%m-%d")
+    if monitor and monitor not in hf.obtener_monitores():
+        raise ValueError("Selecciona un monitor de la lista.")
+    db.ejecutar(
+        """INSERT INTO monitores_sesion(fecha,hora,laboratorio,monitor) VALUES (?,?,?,?)
+           ON CONFLICT(fecha,hora,laboratorio) DO UPDATE SET monitor=excluded.monitor""",
+        (fecha, hora, laboratorio, monitor),
+    )
+
+
 def obtener_intercambios_fecha(fecha):
     """Devuelve la permutación visual de celdas para una fecha de esta sesión."""
     todos = st.session_state.get(CLAVE_INTERCAMBIOS_RESERVAS, {})
