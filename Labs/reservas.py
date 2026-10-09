@@ -6,6 +6,7 @@ from utils import generar_multa
 from constants import LABORATORIOS, LABS_NAMES
 import streamlit as st
 from datetime import datetime
+from numbers import Integral
 
 
 CLAVE_INTERCAMBIOS_RESERVAS = "intercambios_reservas_por_fecha"
@@ -24,6 +25,20 @@ def coordenada_origen_visual(fecha, hora, laboratorio):
     return tuple(origen.split("|", 1))
 
 
+def coordenada_destino_visual(fecha, hora, laboratorio):
+    """Posición física actual de un grupo guardado en sus coordenadas originales."""
+    origen = f"{hora}|{laboratorio}"
+    for destino, contenido in obtener_intercambios_fecha(fecha).items():
+        if contenido == origen:
+            return tuple(destino.split("|", 1))
+    return hora, laboratorio
+
+
+def capacidad_fisica_grupo(fecha, hora, laboratorio):
+    _, destino = coordenada_destino_visual(fecha, hora, laboratorio)
+    return LABORATORIOS.get(destino)
+
+
 def intercambiar_espacios_sesion(fecha, hora_origen, lab_origen, hora_destino, lab_destino):
     """Permuta dos posiciones solo en session_state; nunca escribe en SQLite."""
     if not all((fecha, hora_origen, lab_origen, hora_destino, lab_destino)):
@@ -37,6 +52,14 @@ def intercambiar_espacios_sesion(fecha, hora_origen, lab_origen, hora_destino, l
     mapa = dict(todos.get(fecha, {}))
     contenido_origen = mapa.get(clave_origen, clave_origen)
     contenido_destino = mapa.get(clave_destino, clave_destino)
+    # No se pierden integrantes ni se habilitan bancos fuera del salón físico.
+    from calendario import get_bancos_ocupados
+    for contenido, destino in ((contenido_origen, lab_destino), (contenido_destino, lab_origen)):
+        hora_base, lab_base = contenido.split("|", 1)
+        bancos = get_bancos_ocupados(lab_base, fecha, hora_base)
+        capacidad = LABORATORIOS.get(destino, 0)
+        if len(bancos) > capacidad or any(b > capacidad for b in bancos):
+            raise ValueError(f"El grupo no cabe en {LABS_NAMES.get(destino, destino)}: capacidad de {capacidad} bancos. El intercambio no se realizó.")
     mapa[clave_origen] = contenido_destino
     mapa[clave_destino] = contenido_origen
     todos[fecha] = mapa
@@ -106,6 +129,16 @@ def guardar_reserva(data):
     hora = data[1]
     laboratorio = data[2]
     banco = data[3]
+    capacidad = capacidad_fisica_grupo(fecha, hora, laboratorio)
+    if (not isinstance(banco, Integral) or isinstance(banco, bool) or banco < 1
+            or (capacidad is not None and banco > capacidad)):
+        st.error(f"El banco debe estar entre 1 y {capacidad}, según el salón físico de destino.")
+        return False
+    if coordenada_destino_visual(fecha, hora, laboratorio) != (hora, laboratorio):
+        from calendario import get_bancos_ocupados
+        if banco in get_bancos_ocupados(laboratorio, fecha, hora):
+            st.error(f"El banco {banco} ya está ocupado por el grupo trasladado.")
+            return False
     
     # 1. Verificar que el estudiante no tenga reserva en este horario (cualquier laboratorio)
     if verificar_reserva_existente(codigo, fecha, hora, None):
@@ -134,7 +167,7 @@ def guardar_reserva(data):
                              (laboratorio, fecha, hora), fetch=True)
     tiene_reserva_completa = r_completa[0][0] > 0 if r_completa else False
     
-    if tiene_reserva_completa:
+    if tiene_reserva_completa and (laboratorio not in LABORATORIOS or banco <= LABORATORIOS[laboratorio]):
         st.error(f" El laboratorio está reservado completo en este horario.")
         return False
     
@@ -386,6 +419,9 @@ def cambiar_banco_reserva(id_res, nuevo_banco):
         return False, "Reserva no encontrada"
     
     lab, fecha, hora = r[0]
+    capacidad = capacidad_fisica_grupo(fecha, hora, lab)
+    if int(nuevo_banco) < 1 or (capacidad is not None and int(nuevo_banco) > capacidad):
+        return False, "Banco fuera de la capacidad física del salón de destino"
     
     # Verificar que el nuevo banco esté disponible
     r = db.ejecutar("""SELECT COUNT(*) FROM reservas 
@@ -440,6 +476,11 @@ def actualizar_reservas_desde_editor(cambios):
         if codigo_actual == "PROFESOR" or banco_actual == 0:
             if nuevo_codigo != codigo_actual or nuevo_banco != banco_actual:
                 errores.append(f"{nombres_actual}: las reservas docentes no se cambian desde este editor")
+            continue
+
+        capacidad = capacidad_fisica_grupo(actual[2], actual[3], actual[1])
+        if nuevo_banco < 1 or (capacidad is not None and nuevo_banco > capacidad):
+            errores.append(f"{nombres_actual}: banco fuera de la capacidad física del salón de destino")
             continue
 
         if not nuevo_codigo:

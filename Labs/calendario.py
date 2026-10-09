@@ -91,10 +91,22 @@ def get_bancos_ocupados(lab, fecha, hora):
     
     if tiene_reserva_completa:
         total = LABORATORIOS.get(lab, 0)
-        return list(range(1, total + 1))
+        return sorted(set(range(1, total + 1)) | set(bancos_reservados))
     
     if bancos_reservados:
-        return bancos_reservados
+        # Una clase sin lista individual ya ocupaba los bancos originales.
+        # Añadir un banco extra después del traslado conserva esa ocupación.
+        horario = hf.get_horario_celda(parse_fecha_a_espanol(fecha), hora, lab)
+        if (all(b > LABORATORIOS.get(lab, 0) for b in bancos_reservados)
+                and horario and horario.get("asignatura")
+                and not _es_bloque_reservable(horario.get("asignatura"), horario.get("carrera"))):
+            profesor_no = db.ejecutar(
+                "SELECT 1 FROM reservas WHERE laboratorio=? AND fecha=? AND hora=? AND activo=1 AND codigo='PROFESOR' AND asiste='No'",
+                (lab, fecha, hora), fetch=True,
+            )
+            if not profesor_no:
+                return sorted(set(range(1, LABORATORIOS[lab] + 1)) | set(bancos_reservados))
+        return sorted(set(bancos_reservados))
     
     # Verificar si hay profesor con asiste='No' (para liberar bancos)
     r_profesor_no = db.ejecutar("""SELECT COUNT(*) FROM reservas 
@@ -1160,10 +1172,9 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
         if docente_horario:
             etiqueta += "\n" + _nombre_en_celda("Docente", docente_horario)
             detalle += f" | Docente: {docente_horario}"
-        if es_practica_libre:
-            monitor = horario.get("monitor") or "Sin monitor asignado"
-            etiqueta += "\n" + _nombre_en_celda("Monitor", monitor)
-            detalle += f" | Monitor: {monitor}"
+        monitor = horario.get("monitor") or "Sin monitor asignado"
+        etiqueta += "\n" + _nombre_en_celda("Monitor", monitor)
+        detalle += f" | Monitor: {monitor}"
     elif tiene_asignatura and not reservas_activas:
         estado = "asignatura"
         etiqueta = formatear_etiqueta_horario(horario)
@@ -1199,7 +1210,33 @@ def _obtener_estado_celda(dia_seleccionado, lab, fecha_str, hora, contexto=None)
     }
 
 
+def _ajustar_capacidad_destino(estado, fecha, hora_base, lab_base, lab_destino):
+    """El grupo aporta ocupación; el salón físico aporta la capacidad fija."""
+    resultado = dict(estado)
+    total = LABORATORIOS[lab_destino]
+    bancos = set(get_bancos_ocupados(lab_base, fecha, hora_base))
+    libres = sorted(set(range(1, total + 1)) - bancos)
+    resultado.update(total=total, ocupados=len(bancos), disponibles=len(libres),
+                     bancos_disponibles=libres,
+                     cupo_intercambio=lab_base != lab_destino and bool(libres))
+    if lab_base != lab_destino:
+        resumen = f"{len(bancos)}/{total} · {len(libres)} banco(s) disponible(s)"
+        resultado["detalle"] = f"{estado['detalle']} | Destino: {resumen}"
+        if libres:
+            resultado["estado"] = "libre"
+            resultado["etiqueta"] = f"Cupos disponibles\n{resumen}"
+            if estado.get("horario"):
+                resultado["etiqueta"] += "\n" + str(estado["horario"].get("asignatura") or "")
+        else:
+            resultado["etiqueta"] = f"Ocupado\n{resumen}"
+    return resultado
+
+
 def _datos_celda_seleccionada(sel_lab, sel_fecha, sel_hora, estado):
+    bancos_disponibles = estado.get("bancos_disponibles")
+    if bancos_disponibles is None:
+        ocupados = set(get_bancos_ocupados(sel_lab, sel_fecha, sel_hora))
+        bancos_disponibles = [b for b in range(1, estado["total"] + 1) if b not in ocupados]
     return {
         "fecha": sel_fecha,
         "hora": sel_hora,
@@ -1207,11 +1244,9 @@ def _datos_celda_seleccionada(sel_lab, sel_fecha, sel_hora, estado):
         "ocupados": estado["ocupados"],
         "total": estado["total"],
         "disponibles": estado["disponibles"],
-        "bancos_disponibles": [
-            b for b in range(1, estado["total"] + 1)
-            if b not in get_bancos_ocupados(sel_lab, sel_fecha, sel_hora)
-        ],
-        "es_asignatura": estado["estado"] in ("asignatura", "adicional", "practica_libre", "profesor_si", "profesor_no", "profesor_pendiente"),
+        "cupo_intercambio": estado.get("cupo_intercambio", False),
+        "bancos_disponibles": bancos_disponibles,
+        "es_asignatura": estado.get("tiene_asignatura", False) or estado["estado"] in ("asignatura", "adicional", "practica_libre", "profesor_si", "profesor_no", "profesor_pendiente"),
         "asignatura_info": estado["horario"],
         "es_profesor_asistio": estado["estado"] == "profesor_si",
         "es_profesor_no_asistio": estado["estado"] == "profesor_no",
@@ -1396,7 +1431,10 @@ def mostrar_calendario_interactivo(dia_seleccionado):
     def estado_visual(hora, lab):
         origen = mapa_intercambios.get(f"{hora}|{lab}", f"{hora}|{lab}")
         hora_base, lab_base = origen.split("|", 1)
-        return estados_base.get((hora_base, lab_base), estados_base[(hora, lab)])
+        estado = estados_base.get((hora_base, lab_base), estados_base[(hora, lab)])
+        if (hora_base, lab_base) != (hora, lab):
+            return _ajustar_capacidad_destino(estado, fecha_str, hora_base, lab_base, lab)
+        return estado
 
     estados_visuales = {
         (hora, lab): estado_visual(hora, lab)
@@ -1440,13 +1478,16 @@ def mostrar_calendario_interactivo(dia_seleccionado):
                     "Confirmar intercambio", key=f"confirmar_intercambio_{fecha_str}",
                     use_container_width=True,
                 ):
-                    res.intercambiar_espacios_sesion(
-                        fecha_str, origen[0], origen[1], destino[0], destino[1]
-                    )
-                    st.session_state.intercambio_reserva_flash = (
-                        "Espacios intercambiados para el día seleccionado."
-                    )
-                    st.rerun(scope="fragment")
+                    try:
+                        res.intercambiar_espacios_sesion(
+                            fecha_str, origen[0], origen[1], destino[0], destino[1]
+                        )
+                        st.session_state.intercambio_reserva_flash = (
+                            "Espacios intercambiados para el día seleccionado."
+                        )
+                        st.rerun(scope="fragment")
+                    except ValueError as error:
+                        st.error(str(error))
 
     st.markdown(
         """
@@ -1603,13 +1644,16 @@ def mostrar_calendario_interactivo(dia_seleccionado):
         aceptar, cancelar = st.columns(2)
         if aceptar.button("Intercambiar", use_container_width=True):
             hora_destino, lab_destino = destino.split("|", 1)
-            res.intercambiar_espacios_sesion(
-                fecha_str, origen["hora"], origen["laboratorio"],
-                hora_destino, lab_destino,
-            )
-            st.session_state.intercambio_reserva_flash = "Espacios intercambiados para el día seleccionado."
-            st.session_state.intercambio_reserva_origen = None
-            st.rerun()
+            try:
+                res.intercambiar_espacios_sesion(
+                    fecha_str, origen["hora"], origen["laboratorio"],
+                    hora_destino, lab_destino,
+                )
+                st.session_state.intercambio_reserva_flash = "Espacios intercambiados para el día seleccionado."
+                st.session_state.intercambio_reserva_origen = None
+                st.rerun()
+            except ValueError as error:
+                st.error(str(error))
         if cancelar.button("Cancelar", use_container_width=True):
             st.session_state.intercambio_reserva_origen = None
             st.rerun()
@@ -1959,6 +2003,7 @@ def _render_detalle_celda_contenido():
     # Recalcular tras marcar asistencia: el modal no debe conservar cupos ocupados obsoletos.
     estado = _obtener_estado_celda(parse_fecha_a_espanol(fecha_str), lab, fecha_str, hora)
     posicion_visual = data.get("posicion_visual", (hora, lab))
+    estado = _ajustar_capacidad_destino(estado, fecha_str, hora, lab, posicion_visual[1])
     data = _datos_celda_seleccionada(lab, fecha_str, hora, estado)
     data["posicion_visual"] = posicion_visual
     hora_visible, lab_visible = posicion_visual
@@ -1978,8 +2023,10 @@ def _render_detalle_celda_contenido():
         and not es_adicional
     )
     asistencia_docente_registrada = bool(profesor_data and profesor_data.get("estado") in ("Si", "No"))
-    puede_reservar_individual = disponibles > 0 and not es_profesor_asistio and (
-        not es_asignatura or es_adicional or es_profesor_no_asistio
+    puede_reservar_individual = disponibles > 0 and (
+        data.get("cupo_intercambio", False) or (
+            not es_profesor_asistio and (not es_asignatura or es_adicional or es_profesor_no_asistio)
+        )
     )
 
     st.markdown(
@@ -1992,9 +2039,11 @@ def _render_detalle_celda_contenido():
         unsafe_allow_html=True,
     )
     st.write(f"**Fecha:** {formatear_fecha_espanol(fecha_str)}")
-    st.write(f"**Hora:** {hora}")
+    st.write(f"**Hora:** {hora_visible}")
     if (hora_visible, lab_visible) != (hora, lab):
         st.caption(f"Grupo completo intercambiado a {LABS_NAMES.get(lab_visible, lab_visible)} · {hora_visible} para este día. Las asistencias se guardan en los registros originales del grupo.")
+        if disponibles:
+            st.success(f"Hay {disponibles} banco(s) disponible(s) en el salón de destino para una nueva reserva individual.")
     st.write(f"**Ocupación:** {ocupados}/{total}")
 
     if asignatura_info:
@@ -2016,7 +2065,7 @@ def _render_detalle_celda_contenido():
 
     if not df.empty:
         df_editor = df[["id", "banco", "codigo", "nombres", "proyecto", "asiste"]].copy()
-        render_editor_asistencias(df_editor, f"detalle_{lab}_{fecha_str}_{hora}", lab)
+        render_editor_asistencias(df_editor, f"detalle_{lab}_{fecha_str}_{hora}", lab_visible)
     else:
         if es_profesor_asistio and profesor_data:
             estado = profesor_data.get("estado", "")
@@ -2096,7 +2145,8 @@ def mostrar_detalle_celda():
     fecha_str = data["fecha"]
     hora = data["hora"]
     lab = data["laboratorio"]
-    titulo = f"Detalle - {LABS_NAMES[lab]} {hora} {formatear_fecha_espanol(fecha_str)}"
+    hora_visible, lab_visible = data.get("posicion_visual", (hora, lab))
+    titulo = f"Detalle - {LABS_NAMES[lab_visible]} {hora_visible} {formatear_fecha_espanol(fecha_str)}"
 
     if hasattr(st, "dialog"):
         @st.dialog(titulo, width="large", on_dismiss=_cerrar_detalle_celda_por_dismiss)

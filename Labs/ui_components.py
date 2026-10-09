@@ -558,7 +558,7 @@ def mostrar_horario_general():
                 nombres = []
                 if not es_practica:
                     nombres.append("Docente: " + html_lib.escape(str(celda.get("profesor") or "Sin asignar")))
-                if not es_prestamo:
+                if tipo not in ("préstamo docente", "prestamo docente"):
                     nombres.append("Monitor: " + html_lib.escape(str(celda.get("monitor") or "Sin asignar")))
                 texto = (
                     f"<strong>{html_lib.escape(str(celda['asignatura']))}</strong><br>"
@@ -625,6 +625,7 @@ def mostrar_horario_general():
         )
 
     opciones_carrera_js = json.dumps(opciones_carrera, ensure_ascii=False)
+    opciones_monitor_js = json.dumps(hf.obtener_monitores(), ensure_ascii=False)
 
     horario_script = """
         (function () {
@@ -640,6 +641,7 @@ def mostrar_horario_general():
                 const horarioUiVersion = "stable-parent-v16";
                 const renderedDay = __DIA_HORARIO__;
                 const carreraOptions = __OPCIONES_CARRERA__;
+                const monitorOptions = __OPCIONES_MONITOR__;
 
                 if (!header || !body) {
                     window.setTimeout(setup, 100);
@@ -804,7 +806,7 @@ def mostrar_horario_general():
                                         <select id="horario-modal-carrera" style="border:1px solid #e2d8cb; border-radius:8px; padding:0.7rem; font:inherit; background:#fff; outline:none; box-shadow:none; accent-color:#9f1d24;"></select>
                                     </label>
                                     <label style="display:grid; gap:0.35rem; color:#731116; font-weight:800; font-size:0.86rem;">Monitor
-                                        <input id="horario-modal-monitor" style="border:1px solid #e2d8cb; border-radius:8px; padding:0.7rem; font:inherit; outline:none; box-shadow:none; accent-color:#9f1d24;" />
+                                        <select id="horario-modal-monitor" style="border:1px solid #e2d8cb; border-radius:8px; padding:0.7rem; font:inherit; background:#fff; outline:none; box-shadow:none; accent-color:#9f1d24;"></select>
                                     </label>
                                     <label style="display:grid; gap:0.35rem; color:#731116; font-weight:800; font-size:0.86rem;">Profesor
                                         <input id="horario-modal-profesor" style="border:1px solid #e2d8cb; border-radius:8px; padding:0.7rem; font:inherit; outline:none; box-shadow:none; accent-color:#9f1d24;" />
@@ -857,7 +859,16 @@ def mostrar_horario_general():
                         carreraSelect.appendChild(option);
                     }
                     doc.getElementById("horario-modal-carrera").value = carreraActual;
-                    doc.getElementById("horario-modal-monitor").value = cell.dataset.monitor || "";
+                    const monitorSelect = doc.getElementById("horario-modal-monitor");
+                    const monitorActual = (cell.dataset.monitor || "").trim();
+                    const conservarActual = monitorActual && !monitorOptions.includes(monitorActual);
+                    monitorSelect.dataset.original = monitorActual;
+                    monitorSelect.dataset.changed = "false";
+                    monitorSelect.replaceChildren(new Option(conservarActual ? "Conservar monitor actual" : "Sin monitor asignado", ""));
+                    monitorOptions.forEach(function (monitor) {
+                        monitorSelect.add(new Option(monitor, monitor));
+                    });
+                    monitorSelect.value = monitorOptions.includes(monitorActual) ? monitorActual : "";
                     doc.getElementById("horario-modal-profesor").value = cell.dataset.profesor || "";
                     doc.getElementById("horario-modal-save").href = buildHorarioUrl("guardar");
                     doc.getElementById("horario-modal-free").href = buildHorarioUrl("liberar");
@@ -880,7 +891,8 @@ def mostrar_horario_general():
                     if (action === "guardar") {
                         url.searchParams.set("asignatura", doc.getElementById("horario-modal-asignatura").value);
                         url.searchParams.set("carrera", doc.getElementById("horario-modal-carrera").value);
-                        url.searchParams.set("monitor", doc.getElementById("horario-modal-monitor").value);
+                        const monitorField = doc.getElementById("horario-modal-monitor");
+                        url.searchParams.set("monitor", monitorField.dataset.changed === "true" ? monitorField.value : monitorField.dataset.original || "");
                         url.searchParams.set("profesor", doc.getElementById("horario-modal-profesor").value);
                     }
                     url.searchParams.set("_", Date.now().toString());
@@ -902,6 +914,10 @@ def mostrar_horario_general():
                     ["horario-modal-asignatura", "horario-modal-carrera", "horario-modal-monitor", "horario-modal-profesor"].forEach(function (id) {
                         const field = doc.getElementById(id);
                         if (field) {
+                            if (id === "horario-modal-monitor") {
+                                field.addEventListener("input", function () { field.dataset.changed = "true"; });
+                                field.addEventListener("change", function () { field.dataset.changed = "true"; });
+                            }
                             field.addEventListener("input", refreshActionLinks);
                             field.addEventListener("change", refreshActionLinks);
                         }
@@ -987,7 +1003,7 @@ def mostrar_horario_general():
 
             setup();
         })();
-        """.replace("__OPCIONES_CARRERA__", opciones_carrera_js).replace("__DIA_HORARIO__", json.dumps(dia_seleccionado))
+        """.replace("__OPCIONES_CARRERA__", opciones_carrera_js).replace("__OPCIONES_MONITOR__", opciones_monitor_js).replace("__DIA_HORARIO__", json.dumps(dia_seleccionado))
     # Los listeners y timers pertenecen a la ventana principal y sobreviven al
     # desmontaje del iframe de Streamlit. JSON protege las cadenas del script.
     st.components.v1.html(
@@ -1766,8 +1782,7 @@ def mostrar_deudores():
                 column_config={
                     "Sanción": st.column_config.TextColumn("Sanción", help="Escribe para aplicar o modificar; borra el contenido para levantar la sanción."),
                     "Técnico que asigna": st.column_config.SelectboxColumn(
-                        "Técnico que asigna", options=["", *OPCIONES_TECNICOS[1:],
-                            *sorted(set(tabla["Técnico que asigna"]) - set(OPCIONES_TECNICOS) - {""})],
+                        "Técnico que asigna", options=["", *OPCIONES_TECNICOS[1:]],
                     ),
                 },
             )

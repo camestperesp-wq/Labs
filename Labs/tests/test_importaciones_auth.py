@@ -144,10 +144,28 @@ class ImportacionesTest(unittest.TestCase):
             self.assertFalse(view.selectbox)
         view.query_params.update(accion_horario="guardar", dia=DIAS[0], hora=HORAS[0],
                                  lab=LABS_ORDEN_HORARIO[0], asignatura="Circuitos",
-                                 carrera="Adicional", profesor="Ana", monitor="Monitor", _="test-save")
+                                 carrera="Adicional", profesor="Ana", monitor="Monitor Prueba", _="test-save")
         view.run()
         self.assertFalse(view.exception)
         self.assertEqual(hf.get_horario_celda(DIAS[0], HORAS[0], LABS_ORDEN_HORARIO[0])["profesor"], "Ana")
+        self.assertEqual(hf.get_horario_celda(DIAS[0], HORAS[0], LABS_ORDEN_HORARIO[0])["monitor"], "Monitor Prueba")
+        self.assertEqual(hf.obtener_monitores(), ["Monitor Prueba"])
+        self.assertIn("Monitor: Monitor Prueba", view.get("html")[0].proto.body)
+
+    def test_monitores_unifica_variantes_sin_modificar_horario(self):
+        import horario_fijo as hf
+        from constants import HORAS
+        nombres = ["FABIAN ALEXANDER GARCÍA TÉLEZ", "FABIAN ALEXANDER GARCÍA TÉLLEZ",
+                   "YERSON STEVEN RODRIGUEZ TORRES", "YERSON STIVEN RODRIGUEZ TORRES",
+                   "ANDRES FELIPE GONZALES GONZALES", "ANDRES FELIPE GONZÁLEZ GONZÁLEZ",
+                   "Camilo Pérez"]
+        for hora, nombre in zip(HORAS, nombres):
+            hf.set_horario_celda("Lunes", hora, "604", "Adicional", "Adicional", nombre, "")
+        self.assertEqual(set(hf.obtener_monitores()), {
+            "FABIAN ALEXANDER GARCÍA TÉLLEZ", "YERSON STIVEN RODRIGUEZ TORRES",
+            "ANDRES FELIPE GONZÁLEZ GONZÁLEZ",
+        })
+        self.assertEqual(hf.get_horario_celda("Lunes", HORAS[0], "604")["monitor"], nombres[0])
 
     def test_otras_muestra_campo_y_conserva_concepto(self):
         from streamlit.testing.v1 import AppTest

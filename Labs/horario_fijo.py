@@ -1,6 +1,49 @@
 # horario_fijo.py
 
 import database as db
+from busqueda import normalizar_busqueda
+from constants import TECNICOS
+
+
+# Variantes históricas del mismo monitor. No fusionar personas por parecido.
+_ALIAS_MONITORES = {
+    "fabian alexander garcia telez": "FABIAN ALEXANDER GARCÍA TÉLLEZ",
+    "fabian alexander garcia tellez": "FABIAN ALEXANDER GARCÍA TÉLLEZ",
+    "yerson steven rodriguez torres": "YERSON STIVEN RODRIGUEZ TORRES",
+    "yerson stiven rodriguez torres": "YERSON STIVEN RODRIGUEZ TORRES",
+    "andres felipe gonzales gonzales": "ANDRES FELIPE GONZÁLEZ GONZÁLEZ",
+    "andres felipe gonzalez gonzalez": "ANDRES FELIPE GONZÁLEZ GONZÁLEZ",
+}
+
+
+def obtener_monitores():
+    """Monitores del horario, excluyendo técnicos y abreviaturas inequívocas."""
+    filas = db.ejecutar(
+        """SELECT DISTINCT trim(monitor) FROM horario_fijo
+           WHERE trim(coalesce(monitor,'')) != '' ORDER BY 1 COLLATE NOCASE""",
+        fetch=True,
+    )
+    monitores = {}
+    tecnicos = {normalizar_busqueda(nombre) for nombre in TECNICOS}
+    for fila in filas:
+        nombre = " ".join(fila[0].split())
+        nombre = _ALIAS_MONITORES.get(normalizar_busqueda(nombre), nombre)
+        clave = normalizar_busqueda(nombre)
+        if len(nombre.split()) >= 2 and clave not in tecnicos:
+            monitores.setdefault(clave, nombre)
+
+    def es_abreviatura(corto, completo):
+        restantes = iter(completo.split())
+        return all(any(palabra == candidata for candidata in restantes) for palabra in corto.split())
+
+    resultado = []
+    for clave, nombre in monitores.items():
+        coincidencias = [otra for otra in monitores
+                         if len(otra.split()) > len(clave.split()) and es_abreviatura(clave, otra)]
+        # Solo unir abreviaturas cuando identifican a una única persona.
+        if len(coincidencias) != 1:
+            resultado.append(nombre)
+    return resultado
 
 
 def obtener_docentes():
